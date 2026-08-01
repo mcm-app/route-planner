@@ -699,32 +699,135 @@ function doLocate() {
   );
 }
 
+// ── Snap to road & dead reckoning state ──
+let snappedLat = null, snappedLng = null;
+let snappedIdx = 0;          // Index on route coords
+let currentSpeed = 0;         // metres per second
+let lastGpsTime = 0;
+let deadReckonTimer = null;
+const GPS_TIMEOUT = 5000;     // Start dead reckoning after 5s without GPS
+
 function onGps(pos) {
   currentLat = pos.coords.latitude;
   currentLng = pos.coords.longitude;
-  showUser(currentLat, currentLng);
+  lastGpsTime = Date.now();
 
-  if (prevPos) {
+  // Calculate speed from GPS or use reported speed
+  if (pos.coords.speed !== null && pos.coords.speed > 0) {
+    currentSpeed = pos.coords.speed;
+  } else if (prevPos) {
     const d = haversine(prevPos.lat, prevPos.lng, currentLat, currentLng);
-    if (d > 5) {
-      currentBearing = calcBearing(prevPos.lat, prevPos.lng, currentLat, currentLng);
-      prevPos = { lat: currentLat, lng: currentLng };
-      // Rotate triangle to face direction of travel
-      if (userMarkerEl) {
-        userMarkerEl.style.transform = `rotate(${currentBearing}deg)`;
+    const dt = (Date.now() - (prevPos.time || Date.now())) / 1000;
+    if (dt > 0 && d > 3) currentSpeed = d / dt;
+  }
+
+  // Snap to route if navigating
+  if (isNav && routeCoords && routeCoords.length > 1) {
+    snapToRoute(currentLat, currentLng);
+    showUser(snappedLat, snappedLng);
+
+    // Calculate bearing from route, not GPS
+    if (snappedIdx < routeCoords.length - 1) {
+      currentBearing = calcBearing(
+        routeCoords[snappedIdx][1], routeCoords[snappedIdx][0],
+        routeCoords[snappedIdx + 1][1], routeCoords[snappedIdx + 1][0]
+      );
+    }
+
+    if (userMarkerEl) userMarkerEl.style.transform = `rotate(${currentBearing}deg)`;
+    updateNavView(snappedLat, snappedLng);
+    updateTravelledRoute(snappedLat, snappedLng);
+    updateRouteBarPosition(snappedLat, snappedLng);
+
+    // Reset dead reckoning timer
+    clearInterval(deadReckonTimer);
+    deadReckonTimer = setInterval(deadReckon, 1000);
+  } else {
+    showUser(currentLat, currentLng);
+
+    if (prevPos) {
+      const d = haversine(prevPos.lat, prevPos.lng, currentLat, currentLng);
+      if (d > 5) {
+        currentBearing = calcBearing(prevPos.lat, prevPos.lng, currentLat, currentLng);
+        if (userMarkerEl) userMarkerEl.style.transform = `rotate(${currentBearing}deg)`;
       }
     }
-  } else {
-    prevPos = { lat: currentLat, lng: currentLng };
+
+    if (hasRoute) updateRouteBarPosition(currentLat, currentLng);
   }
 
-  if (isNav) {
-    updateNavView(currentLat, currentLng);
-    updateTravelledRoute(currentLat, currentLng);
-    updateRouteBarPosition(currentLat, currentLng);
-  } else if (hasRoute) {
-    updateRouteBarPosition(currentLat, currentLng);
+  prevPos = { lat: currentLat, lng: currentLng, time: Date.now() };
+}
+
+function snapToRoute(lat, lng) {
+  let bestDist = Infinity, bestIdx = 0;
+  // Search near current snapped position first for performance
+  const searchStart = Math.max(0, snappedIdx - 10);
+  const searchEnd = Math.min(routeCoords.length - 1, snappedIdx + 50);
+
+  for (let i = searchStart; i <= searchEnd; i++) {
+    const d = haversine(lat, lng, routeCoords[i][1], routeCoords[i][0]);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
   }
+
+  // If not found nearby, do a wider search
+  if (bestDist > 100) {
+    for (let i = 0; i < routeCoords.length; i++) {
+      const d = haversine(lat, lng, routeCoords[i][1], routeCoords[i][0]);
+      if (d < bestDist) { bestDist = d; bestIdx = i; }
+    }
+  }
+
+  snappedIdx = bestIdx;
+  snappedLat = routeCoords[bestIdx][1];
+  snappedLng = routeCoords[bestIdx][0];
+}
+
+function deadReckon() {
+  if (!isNav || !routeCoords || currentSpeed < 1) return;
+  const timeSinceGps = Date.now() - lastGpsTime;
+  if (timeSinceGps < GPS_TIMEOUT) return;
+
+  // Advance along route at current speed
+  let distToMove = currentSpeed * 1; // 1 second of travel
+  let idx = snappedIdx;
+
+  while (distToMove > 0 && idx < routeCoords.length - 1) {
+    const segDist = haversine(
+      routeCoords[idx][1], routeCoords[idx][0],
+      routeCoords[idx + 1][1], routeCoords[idx + 1][0]
+    );
+    if (distToMove >= segDist) {
+      distToMove -= segDist;
+      idx++;
+    } else {
+      // Interpolate along segment
+      const frac = distToMove / segDist;
+      snappedLat = routeCoords[idx][1] + frac * (routeCoords[idx + 1][1] - routeCoords[idx][1]);
+      snappedLng = routeCoords[idx][0] + frac * (routeCoords[idx + 1][0] - routeCoords[idx][0]);
+      distToMove = 0;
+    }
+  }
+
+  snappedIdx = idx;
+  if (idx < routeCoords.length) {
+    snappedLat = snappedLat || routeCoords[idx][1];
+    snappedLng = snappedLng || routeCoords[idx][0];
+  }
+
+  // Update bearing from route
+  if (snappedIdx < routeCoords.length - 1) {
+    currentBearing = calcBearing(
+      routeCoords[snappedIdx][1], routeCoords[snappedIdx][0],
+      routeCoords[snappedIdx + 1][1], routeCoords[snappedIdx + 1][0]
+    );
+  }
+
+  if (userMarkerEl) userMarkerEl.style.transform = `rotate(${currentBearing}deg)`;
+  showUser(snappedLat, snappedLng);
+  updateNavView(snappedLat, snappedLng);
+  updateTravelledRoute(snappedLat, snappedLng);
+  updateRouteBarPosition(snappedLat, snappedLng);
 }
 
 function showUser(lat, lng) {
@@ -827,12 +930,35 @@ function toggle3D() {
   map.easeTo({ pitch: is3D ? 60 : 0, duration: 500 });
 }
 
+// ── Screen wake lock ──
+let wakeLock = null;
+
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    }
+  } catch (e) {}
+}
+
+function releaseWakeLock() {
+  if (wakeLock) { wakeLock.release(); wakeLock = null; }
+}
+
+// Re-acquire wake lock when app becomes visible again (e.g. switching back from another app)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && isNav) requestWakeLock();
+});
+
 function toggleNav() {
   isNav = !isNav;
   const btn = document.getElementById('navBtn');
 
   if (isNav) {
     if (!isLocating) doLocate();
+    requestWakeLock();
+    deadReckonTimer = setInterval(deadReckon, 1000);
     btn.textContent = '■ Stop';
     btn.classList.add('active');
     document.getElementById('topPanel').classList.remove('collapsed');
@@ -863,6 +989,8 @@ function toggleNav() {
       pitch: 60, zoom: 17, duration: 800
     });
   } else {
+    releaseWakeLock();
+    clearInterval(deadReckonTimer);
     btn.textContent = '▶ Drive';
     btn.classList.remove('active');
     document.getElementById('topPanel').classList.remove('hidden');
@@ -1034,6 +1162,8 @@ function clearRoute() {
 
   if (isNav) {
     isNav = false;
+    releaseWakeLock();
+    clearInterval(deadReckonTimer);
     document.getElementById('navBtn').textContent = '▶ Drive';
     document.getElementById('navBtn').classList.remove('active');
     document.getElementById('turnBubble').classList.remove('visible');
