@@ -133,9 +133,8 @@
 
   /* ── User triangle marker ── */
   .user-triangle {
-    width: 0; height: 0; border-left: 10px solid transparent;
-    border-right: 10px solid transparent; border-bottom: 20px solid var(--accent);
-    filter: drop-shadow(0 0 4px rgba(59,156,255,0.6));
+    width: 30px; height: 30px;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
     transition: transform 0.5s ease;
   }
   .maplibregl-marker { transition: transform 0.8s linear !important; }
@@ -645,7 +644,7 @@ function closePoiPopup() {
   if (isNav && currentLat !== null) {
     // Resume nav view - follow user position
     // Resume nav view with offset
-    const od = 25;
+    const od = 40;
     const br = currentBearing * Math.PI / 180;
     const Re = 6371000;
     const l1 = currentLat * Math.PI / 180;
@@ -1067,6 +1066,9 @@ function showUser(lat, lng) {
   if (!userMarker) {
     userMarkerEl = document.createElement('div');
     userMarkerEl.className = 'user-triangle';
+    userMarkerEl.innerHTML = `<svg width="30" height="30" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg">
+      <path d="M15 2 L26 26 L15 20 L4 26 Z" fill="#4a90d9" stroke="white" stroke-width="2.5" stroke-linejoin="round"/>
+    </svg>`;
     userMarker = new maplibregl.Marker({ element: userMarkerEl, anchor: 'center' })
       .setLngLat([lng, lat]).addTo(map);
   } else {
@@ -1217,7 +1219,7 @@ function toggleNav() {
     }
 
     // Offset center ahead so triangle appears lower on screen
-    const offDist = 25;
+    const offDist = 40;
     const bRad = currentBearing * Math.PI / 180;
     const Rr = 6371000;
     const la1 = startLat * Math.PI / 180;
@@ -1404,7 +1406,7 @@ function updateNavView(lat, lng) {
   }
 
   // Offset center ahead of user so triangle appears 3/4 down screen
-  const offsetDist = 25; // metres ahead to shift center
+  const offsetDist = 40; // metres ahead to shift center
   const bearingRad = currentBearing * Math.PI / 180;
   const R = 6371000;
   const lat1 = lat * Math.PI / 180;
