@@ -374,27 +374,51 @@
 let mapReady = false;
 const routeMarkers = [];
 
+// ── TomTom API key ──
+const TT_KEY_STORE = 'routePlannerTTKey';
+function getTTKey() {
+  let key = localStorage.getItem(TT_KEY_STORE);
+  if (!key) {
+    key = prompt('Enter your TomTom API key (get one free at developer.tomtom.com):');
+    if (key) localStorage.setItem(TT_KEY_STORE, key.trim());
+  }
+  return key ? key.trim() : null;
+}
+
+// Get key for map init
+const ttMapKey = getTTKey();
+
 const map = new maplibregl.Map({
   container: 'map',
   style: {
     version: 8,
     sources: {
-      carto: {
+      'tomtom-base': {
         type: 'raster',
         tiles: [
-          'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-          'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-          'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-          'https://d.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png'
+          `https://a.api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512`,
+          `https://b.api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512`,
+          `https://c.api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512`,
+          `https://d.api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512`
         ],
         tileSize: 256,
-        attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/">CARTO</a>'
+        attribution: '© <a href="https://www.tomtom.com/copyright">TomTom</a>'
+      },
+      'tomtom-traffic': {
+        type: 'raster',
+        tiles: [
+          `https://a.api.tomtom.com/traffic/map/4/tile/flow/relative/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512&thickness=6`,
+          `https://b.api.tomtom.com/traffic/map/4/tile/flow/relative/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512&thickness=6`
+        ],
+        tileSize: 256
       }
     },
-    layers: [{
-      id: 'carto-tiles', type: 'raster', source: 'carto',
-      minzoom: 0, maxzoom: 20
-    }]
+    layers: [
+      { id: 'tomtom-tiles', type: 'raster', source: 'tomtom-base', minzoom: 0, maxzoom: 22 },
+      { id: 'traffic-flow', type: 'raster', source: 'tomtom-traffic', minzoom: 8, maxzoom: 22,
+        paint: { 'raster-opacity': 0.7 }
+      }
+    ]
   },
   center: [0.95, 52.63],
   zoom: 9, pitch: 0, bearing: 0, maxPitch: 70
@@ -1473,17 +1497,6 @@ function checkReady() {
 }
 
 // ── Routing ──
-// ── TomTom API key ──
-const TT_KEY_STORE = 'routePlannerTTKey';
-function getTTKey() {
-  let key = localStorage.getItem(TT_KEY_STORE);
-  if (!key) {
-    key = prompt('Enter your TomTom API key (get one free at developer.tomtom.com):');
-    if (key) localStorage.setItem(TT_KEY_STORE, key.trim());
-  }
-  return key ? key.trim() : null;
-}
-
 function calcRoute() {
   if (stops.some(s => s.lat === null)) return;
   if (!mapReady) { alert('Map is still loading — try again in a moment.'); return; }
