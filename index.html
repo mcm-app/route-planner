@@ -408,8 +408,8 @@ const map = new maplibregl.Map({
       'tomtom-traffic': {
         type: 'raster',
         tiles: [
-          `https://a.api.tomtom.com/maps/orbis/traffic/tile/flow/{z}/{x}/{y}.png?apiVersion=1&style=light&key=${ttMapKey}&tileSize=512`,
-          `https://b.api.tomtom.com/maps/orbis/traffic/tile/flow/{z}/{x}/{y}.png?apiVersion=1&style=light&key=${ttMapKey}&tileSize=512`
+          `https://a.api.tomtom.com/traffic/map/4/tile/flow/relative-delay/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512&thickness=6`,
+          `https://b.api.tomtom.com/traffic/map/4/tile/flow/relative-delay/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512&thickness=6`
         ],
         tileSize: 256
       }
@@ -1301,7 +1301,7 @@ function showTurnHighlight(step) {
   }
 
   let startIdx = bestIdx, dist = 0;
-  while (startIdx > 0 && dist < 30) {
+  while (startIdx > 0 && dist < 5) {
     startIdx--;
     dist += haversine(routeCoords[startIdx][1], routeCoords[startIdx][0],
       routeCoords[startIdx + 1][1], routeCoords[startIdx + 1][0]);
@@ -1309,7 +1309,7 @@ function showTurnHighlight(step) {
 
   let endIdx = bestIdx;
   dist = 0;
-  while (endIdx < routeCoords.length - 1 && dist < 30) {
+  while (endIdx < routeCoords.length - 1 && dist < 5) {
     endIdx++;
     dist += haversine(routeCoords[endIdx - 1][1], routeCoords[endIdx - 1][0],
       routeCoords[endIdx][1], routeCoords[endIdx][0]);
