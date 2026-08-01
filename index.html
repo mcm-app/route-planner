@@ -24,8 +24,8 @@
     --danger: #ff5c5c;
     --muted: #8890a4;
     --green: #22c55e;
-    --route-green: #9b59ff;
-    --route-pale: rgba(155,89,255,0.3);
+    --route-green: #5bc0fa;
+    --route-pale: rgba(91,192,250,0.3);
     --amber: #f59e0b;
     --radius: 8px;
     --safe-top: env(safe-area-inset-top, 0px);
@@ -969,17 +969,17 @@ function autoReroute() {
     map.addLayer({
       id: 'route-outline', type: 'line', source: 'route',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#2d1854', 'line-width': 9, 'line-opacity': 0.4 }
+      paint: { 'line-color': '#1a4a6e', 'line-width': 9, 'line-opacity': 0.4 }
     });
     map.addLayer({
       id: 'route-line', type: 'line', source: 'route',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#9b59ff', 'line-width': 6, 'line-opacity': 0.9 }
+      paint: { 'line-color': '#5bc0fa', 'line-width': 6, 'line-opacity': 0.9 }
     });
     map.addLayer({
       id: 'route-travelled-line', type: 'line', source: 'route-travelled',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': 'rgba(155,89,255,0.3)', 'line-width': 6, 'line-opacity': 1 }
+      paint: { 'line-color': 'rgba(91,192,250,0.3)', 'line-width': 6, 'line-opacity': 1 }
     });
 
     // Update summary
@@ -1704,21 +1704,21 @@ function drawRoute(route) {
   map.addLayer({
     id: 'route-outline', type: 'line', source: 'route',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint: { 'line-color': '#2d1854', 'line-width': 9, 'line-opacity': 0.4 }
+    paint: { 'line-color': '#1a4a6e', 'line-width': 9, 'line-opacity': 0.4 }
   });
 
   // Main route — bright green
   map.addLayer({
     id: 'route-line', type: 'line', source: 'route',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint: { 'line-color': '#9b59ff', 'line-width': 6, 'line-opacity': 0.9 }
+    paint: { 'line-color': '#5bc0fa', 'line-width': 6, 'line-opacity': 0.9 }
   });
 
   // Travelled route — pale green on top
   map.addLayer({
     id: 'route-travelled-line', type: 'line', source: 'route-travelled',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint: { 'line-color': 'rgba(155,89,255,0.3)', 'line-width': 6, 'line-opacity': 1 }
+    paint: { 'line-color': 'rgba(91,192,250,0.3)', 'line-width': 6, 'line-opacity': 1 }
   });
 
   // Stop markers
