@@ -391,35 +391,15 @@ const ttMapKey = getTTKey();
 
 const map = new maplibregl.Map({
   container: 'map',
-  style: {
-    version: 8,
-    sources: {
-      'tomtom-base': {
-        type: 'raster',
-        tiles: [
-          `https://a.api.tomtom.com/maps/orbis/map-display/tile/{z}/{x}/{y}.png?apiVersion=1&style=street-light&key=${ttMapKey}&tileSize=512`,
-          `https://b.api.tomtom.com/maps/orbis/map-display/tile/{z}/{x}/{y}.png?apiVersion=1&style=street-light&key=${ttMapKey}&tileSize=512`,
-          `https://c.api.tomtom.com/maps/orbis/map-display/tile/{z}/{x}/{y}.png?apiVersion=1&style=street-light&key=${ttMapKey}&tileSize=512`,
-          `https://d.api.tomtom.com/maps/orbis/map-display/tile/{z}/{x}/{y}.png?apiVersion=1&style=street-light&key=${ttMapKey}&tileSize=512`
-        ],
-        tileSize: 256,
-        attribution: '© <a href="https://www.tomtom.com/copyright">TomTom</a>'
-      },
-      'tomtom-traffic': {
-        type: 'raster',
-        tiles: [
-          `https://a.api.tomtom.com/traffic/map/4/tile/flow/relative-delay/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512&thickness=6`,
-          `https://b.api.tomtom.com/traffic/map/4/tile/flow/relative-delay/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512&thickness=6`
-        ],
-        tileSize: 256
-      }
-    },
-    layers: [
-      { id: 'tomtom-tiles', type: 'raster', source: 'tomtom-base', minzoom: 0, maxzoom: 22 }
-    ]
-  },
+  style: `https://api.tomtom.com/maps/orbis/assets/styles/0.*/style.json?key=${ttMapKey}&apiVersion=1&map=basic_street-light`,
   center: [0.95, 52.63],
-  zoom: 9, pitch: 0, bearing: 0, maxPitch: 70
+  zoom: 9, pitch: 0, bearing: 0, maxPitch: 70,
+  transformRequest: (url) => {
+    if (url.includes('api.tomtom.com') && !url.includes('key=')) {
+      return { url: url + (url.includes('?') ? '&' : '?') + 'key=' + ttMapKey };
+    }
+    return { url };
+  }
 });
 
 map.addControl(new maplibregl.NavigationControl({ showCompass: true, showZoom: true }), 'bottom-left');
@@ -462,7 +442,19 @@ function addRouteArrows() {
   // No full-route arrows needed
 }
 
-map.on('load', () => { mapReady = true; ensureTrafficLayer(); });
+map.on('load', () => {
+  mapReady = true;
+  // Add traffic raster overlay source
+  map.addSource('tomtom-traffic', {
+    type: 'raster',
+    tiles: [
+      `https://a.api.tomtom.com/traffic/map/4/tile/flow/relative-delay/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512&thickness=6`,
+      `https://b.api.tomtom.com/traffic/map/4/tile/flow/relative-delay/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512&thickness=6`
+    ],
+    tileSize: 256
+  });
+  ensureTrafficLayer();
+});
 
 // Tap map to toggle route summary
 map.on('click', () => {
