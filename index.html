@@ -840,7 +840,28 @@ function toggleNav() {
     document.getElementById('summary').classList.remove('visible');
     is3D = true;
     document.getElementById('viewToggle').classList.add('active');
-    map.easeTo({ pitch: 60, zoom: 17, duration: 800 });
+
+    // Centre on current GPS position if known, otherwise route start
+    let startLng, startLat;
+    if (currentLat !== null && currentLng !== null) {
+      startLng = currentLng;
+      startLat = currentLat;
+    } else if (stops.length && stops[0].lat !== null) {
+      startLng = stops[0].lng;
+      startLat = stops[0].lat;
+    } else if (routeCoords && routeCoords.length) {
+      startLng = routeCoords[0][0];
+      startLat = routeCoords[0][1];
+    } else {
+      startLng = map.getCenter().lng;
+      startLat = map.getCenter().lat;
+    }
+
+    map.easeTo({
+      center: [startLng, startLat],
+      bearing: currentBearing,
+      pitch: 60, zoom: 17, duration: 800
+    });
   } else {
     btn.textContent = '▶ Drive';
     btn.classList.remove('active');
