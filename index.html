@@ -136,8 +136,9 @@
     width: 0; height: 0; border-left: 10px solid transparent;
     border-right: 10px solid transparent; border-bottom: 20px solid var(--accent);
     filter: drop-shadow(0 0 4px rgba(59,156,255,0.6));
-    transition: transform 0.3s ease;
+    transition: transform 0.5s ease;
   }
+  .maplibregl-marker { transition: transform 0.8s linear !important; }
 
   /* ── Bottom summary ── */
   #summary {
@@ -828,6 +829,23 @@ function snapToRoute(lat, lng) {
     for (let i = 0; i < routeCoords.length; i++) {
       const d = haversine(lat, lng, routeCoords[i][1], routeCoords[i][0]);
       if (d < bestDist) { bestDist = d; bestIdx = i; }
+    }
+  }
+
+  // Interpolate between nearest point and adjacent point for smooth movement
+  if (bestIdx < routeCoords.length - 1) {
+    const ax = routeCoords[bestIdx][0], ay = routeCoords[bestIdx][1];
+    const bx = routeCoords[bestIdx + 1][0], by = routeCoords[bestIdx + 1][1];
+    // Project GPS position onto the line segment A→B
+    const dx = bx - ax, dy = by - ay;
+    const segLenSq = dx * dx + dy * dy;
+    if (segLenSq > 0) {
+      let t = ((lng - ax) * dx + (lat - ay) * dy) / segLenSq;
+      t = Math.max(0, Math.min(1, t));
+      snappedLng = ax + t * dx;
+      snappedLat = ay + t * dy;
+      snappedIdx = bestIdx;
+      return bestDist;
     }
   }
 
