@@ -719,6 +719,9 @@ let currentSpeed = 0;         // metres per second
 let lastGpsTime = 0;
 let deadReckonTimer = null;
 const GPS_TIMEOUT = 5000;     // Start dead reckoning after 5s without GPS
+const OFF_ROUTE_DIST = 50;    // metres from route before rerouting
+let offRouteCount = 0;        // consecutive off-route readings
+let isRerouting = false;
 
 function onGps(pos) {
   currentLat = pos.coords.latitude;
@@ -736,8 +739,21 @@ function onGps(pos) {
 
   // Snap to route if navigating
   if (isNav && routeCoords && routeCoords.length > 1) {
-    snapToRoute(currentLat, currentLng);
-    showUser(snappedLat, snappedLng);
+    const distFromRoute = snapToRoute(currentLat, currentLng);
+
+    // Auto-recalculate if off route
+    if (distFromRoute > OFF_ROUTE_DIST) {
+      offRouteCount++;
+      // Need 3 consecutive off-route readings to trigger reroute (avoids GPS glitches)
+      if (offRouteCount >= 3 && !isRerouting) {
+        autoReroute();
+      }
+      // While off route, show actual GPS position not snapped
+      showUser(currentLat, currentLng);
+    } else {
+      offRouteCount = 0;
+      showUser(snappedLat, snappedLng);
+    }
 
     // Calculate bearing from route, not GPS
     if (snappedIdx < routeCoords.length - 1) {
@@ -794,6 +810,7 @@ function snapToRoute(lat, lng) {
   snappedIdx = bestIdx;
   snappedLat = routeCoords[bestIdx][1];
   snappedLng = routeCoords[bestIdx][0];
+  return bestDist;
 }
 
 function deadReckon() {
@@ -841,6 +858,136 @@ function deadReckon() {
   updateNavView(snappedLat, snappedLng);
   updateTravelledRoute(snappedLat, snappedLng);
   updateRouteBarPosition(snappedLat, snappedLng);
+}
+
+// ── Auto-reroute when off route ──
+function autoReroute() {
+  if (isRerouting) return;
+  isRerouting = true;
+
+  // Flash the turn bubble to show rerouting
+  document.getElementById('tbDist').textContent = '⟳';
+  document.getElementById('tbInstr').textContent = 'Rerouting...';
+  document.getElementById('turnBubble').classList.add('visible');
+
+  // Get remaining destination(s) — current position to final destination
+  // Find which stops we haven't passed yet
+  const remainingStops = [];
+  remainingStops.push({ lat: currentLat, lng: currentLng }); // Start from current position
+
+  // Add any via stops we haven't reached yet
+  for (let i = 1; i < stops.length; i++) {
+    const stopDist = haversine(currentLat, currentLng, stops[i].lat, stops[i].lng);
+    // Include stops that are more than 200m away (haven't been reached)
+    if (stopDist > 200) {
+      remainingStops.push({ lat: stops[i].lat, lng: stops[i].lng });
+    }
+  }
+
+  // Always include the final destination
+  const finalDest = stops[stops.length - 1];
+  if (remainingStops[remainingStops.length - 1].lat !== finalDest.lat ||
+      remainingStops[remainingStops.length - 1].lng !== finalDest.lng) {
+    remainingStops.push({ lat: finalDest.lat, lng: finalDest.lng });
+  }
+
+  if (remainingStops.length < 2) { isRerouting = false; return; }
+
+  // Build TomTom reroute request
+  const ttKey = localStorage.getItem(TT_KEY_STORE);
+  if (!ttKey) { isRerouting = false; return; }
+
+  const avoids = [];
+  document.querySelectorAll('.chip.active[data-ex]').forEach(c => {
+    const ex = c.dataset.ex;
+    if (ex === 'toll') avoids.push('tollRoads');
+    if (ex === 'motorway') avoids.push('motorways');
+    if (ex === 'ferry') avoids.push('ferries');
+  });
+
+  const coords = remainingStops.map(s => `${s.lat},${s.lng}`).join(':');
+  let url = `https://api.tomtom.com/routing/1/calculateRoute/${coords}/json?key=${ttKey}`;
+  url += '&traffic=true&travelMode=car&routeType=fastest';
+  url += '&instructionsType=text&language=en-GB&routeRepresentation=polyline';
+  if (avoids.length) url += '&avoid=' + avoids.join(',');
+
+  fetch(url).then(r => r.json()).then(data => {
+    isRerouting = false;
+    offRouteCount = 0;
+
+    if (!data.routes || !data.routes.length) return;
+
+    const route = convertTTRoute(data.routes[0]);
+
+    // Clear old route layers
+    ['route-travelled-line', 'route-outline', 'route-line', 'turn-highlight-line', 'turn-highlight-glow'].forEach(id => {
+      if (map.getLayer(id)) map.removeLayer(id);
+    });
+    ['route', 'route-travelled', 'turn-highlight'].forEach(id => {
+      if (map.getSource(id)) map.removeSource(id);
+    });
+    turnHighlightActive = false;
+
+    routeCoords = route.geometry.coordinates;
+    routeSteps = [];
+    route.legs.forEach(leg => routeSteps.push(...leg.steps));
+    snappedIdx = 0;
+
+    // Redraw route
+    map.addSource('route-travelled', {
+      type: 'geojson',
+      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [routeCoords[0], routeCoords[0]] } }
+    });
+    map.addSource('route', {
+      type: 'geojson',
+      data: { type: 'Feature', geometry: route.geometry }
+    });
+    map.addLayer({
+      id: 'route-outline', type: 'line', source: 'route',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#0a4a1a', 'line-width': 9, 'line-opacity': 0.4 }
+    });
+    map.addLayer({
+      id: 'route-line', type: 'line', source: 'route',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#00e64d', 'line-width': 6, 'line-opacity': 0.9 }
+    });
+    map.addLayer({
+      id: 'route-travelled-line', type: 'line', source: 'route-travelled',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': 'rgba(0,230,77,0.35)', 'line-width': 6, 'line-opacity': 1 }
+    });
+
+    // Update summary
+    let totalSec = 0, totalM = 0;
+    route.legs.forEach(l => { totalSec += l.duration; totalM += l.distance; });
+    totalRouteLength = totalM;
+    document.getElementById('sTime').textContent = fmtDur(totalSec);
+    document.getElementById('sDist').textContent = fmtDist(totalM);
+
+    // Update directions
+    const dirList = document.getElementById('dirList');
+    dirList.innerHTML = '';
+    let n = 1;
+    route.legs.forEach((leg, legIdx) => {
+      leg.steps.forEach(step => {
+        const d = document.createElement('div'); d.className = 'dir-step';
+        if (step.maneuver.type === 'arrive') {
+          d.innerHTML = `<div class="step-n" style="color:var(--green)">✓</div><div><div>Arrive at destination</div></div>`;
+        } else {
+          d.innerHTML = `<div class="step-n">${n}</div><div><div>${buildInstruction(step)}</div>${step.distance ? `<div class="step-d">${fmtDist(step.distance)}</div>` : ''}</div>`;
+          n++;
+        }
+        dirList.appendChild(d);
+      });
+    });
+
+    // Re-search POIs
+    searchRoutePOIs();
+
+  }).catch(() => {
+    isRerouting = false;
+  });
 }
 
 function showUser(lat, lng) {
@@ -1326,36 +1473,181 @@ function checkReady() {
 }
 
 // ── Routing ──
+// ── TomTom API key ──
+const TT_KEY_STORE = 'routePlannerTTKey';
+function getTTKey() {
+  let key = localStorage.getItem(TT_KEY_STORE);
+  if (!key) {
+    key = prompt('Enter your TomTom API key (get one free at developer.tomtom.com):');
+    if (key) localStorage.setItem(TT_KEY_STORE, key.trim());
+  }
+  return key ? key.trim() : null;
+}
+
 function calcRoute() {
   if (stops.some(s => s.lat === null)) return;
   if (!mapReady) { alert('Map is still loading — try again in a moment.'); return; }
 
+  const ttKey = getTTKey();
+  if (!ttKey) return;
+
   document.getElementById('spin').classList.add('on');
 
-  const excludes = [];
-  document.querySelectorAll('.chip.active[data-ex]').forEach(c => excludes.push(c.dataset.ex));
-  const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
-  let url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`;
-  if (excludes.length) url += `&exclude=${excludes.join(',')}`;
+  // Build TomTom route coordinates: lat,lng:lat,lng
+  const coords = stops.map(s => `${s.lat},${s.lng}`).join(':');
+
+  // Build avoid list
+  const avoids = [];
+  document.querySelectorAll('.chip.active[data-ex]').forEach(c => {
+    const ex = c.dataset.ex;
+    if (ex === 'toll') avoids.push('tollRoads');
+    if (ex === 'motorway') avoids.push('motorways');
+    if (ex === 'ferry') avoids.push('ferries');
+  });
+
+  let url = `https://api.tomtom.com/routing/1/calculateRoute/${coords}/json?key=${ttKey}`;
+  url += '&traffic=true&travelMode=car&routeType=fastest';
+  url += '&instructionsType=text&language=en-GB';
+  url += '&routeRepresentation=polyline&maxAlternatives=1';
+  if (avoids.length) url += '&avoid=' + avoids.join(',');
 
   fetch(url).then(r => r.json()).then(data => {
     document.getElementById('spin').classList.remove('on');
-    if (data.code !== 'Ok' || !data.routes.length) {
-      if (excludes.length) {
-        if (confirm('Could not find a route with those restrictions. Try without them?')) {
-          document.querySelectorAll('.chip.active[data-ex]').forEach(c => c.classList.remove('active'));
-          calcRoute();
-        }
-      } else {
-        alert('Could not find a route between those locations.');
-      }
+    if (!data.routes || !data.routes.length) {
+      alert('Could not find a route between those locations.');
       return;
     }
-    drawRoute(data.routes[0]);
-  }).catch(() => {
+    // Convert TomTom response to our internal format
+    const ttRoute = data.routes[0];
+    const route = convertTTRoute(ttRoute);
+    drawRoute(route);
+
+    // Show traffic delay if significant
+    const delay = ttRoute.summary.trafficDelayInSeconds || 0;
+    if (delay > 120) {
+      document.getElementById('sTime').textContent += ` (+${fmtDur(delay)} traffic)`;
+    }
+
+    // If alternative route exists, show option
+    if (data.routes.length > 1) {
+      const altRoute = data.routes[1];
+      const altTime = altRoute.summary.travelTimeInSeconds;
+      const mainTime = ttRoute.summary.travelTimeInSeconds;
+      if (altTime < mainTime - 60) {
+        // Alternative is significantly faster
+        showAltRouteOption(altRoute, mainTime - altTime);
+      }
+    }
+  }).catch(err => {
     document.getElementById('spin').classList.remove('on');
-    alert('Routing error — check your connection and try again.');
+    console.error('TomTom routing error:', err);
+    alert('Routing error — check your connection and API key.');
   });
+}
+
+function convertTTRoute(ttRoute) {
+  // Convert TomTom format to our internal format (similar to OSRM)
+  const allPoints = [];
+  const legs = [];
+
+  ttRoute.legs.forEach((leg, legIdx) => {
+    const legPoints = leg.points.map(p => [p.longitude, p.latitude]);
+    allPoints.push(...legPoints);
+
+    // Convert TomTom guidance instructions to steps
+    const steps = [];
+    const instructions = (ttRoute.guidance && ttRoute.guidance.instructions) || [];
+    const legInstructions = instructions.filter(inst =>
+      inst.routeOffsetInMeters !== undefined
+    );
+
+    // Group instructions by leg
+    legInstructions.forEach(inst => {
+      const maneuverType = mapTTManeuver(inst.maneuver || '');
+      steps.push({
+        maneuver: {
+          type: maneuverType,
+          location: [inst.point.longitude, inst.point.latitude],
+          modifier: inst.maneuver || '',
+          bearing_after: inst.bearing || 0
+        },
+        name: inst.street || inst.roadNumber || '',
+        ref: inst.roadNumber || '',
+        distance: inst.routeOffsetInMeters || 0,
+        duration: inst.travelTimeInSeconds || 0,
+        geometry: {
+          type: 'LineString',
+          coordinates: legPoints.slice(
+            Math.max(0, findNearestIdx(legPoints, inst.point.latitude, inst.point.longitude) - 5),
+            findNearestIdx(legPoints, inst.point.latitude, inst.point.longitude) + 10
+          )
+        },
+        instruction: inst.message || inst.combinedMessage || ''
+      });
+    });
+
+    legs.push({
+      duration: leg.summary.travelTimeInSeconds,
+      distance: leg.summary.lengthInMeters,
+      steps: steps
+    });
+  });
+
+  return {
+    geometry: {
+      type: 'LineString',
+      coordinates: allPoints
+    },
+    legs: legs
+  };
+}
+
+function findNearestIdx(points, lat, lng) {
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < points.length; i++) {
+    const d = Math.abs(points[i][1] - lat) + Math.abs(points[i][0] - lng);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+function mapTTManeuver(m) {
+  const ml = m.toLowerCase();
+  if (ml.includes('arrive')) return 'arrive';
+  if (ml.includes('depart')) return 'depart';
+  if (ml.includes('roundabout')) return 'roundabout';
+  if (ml.includes('turn')) return 'turn';
+  if (ml.includes('keep')) return 'fork';
+  if (ml.includes('merge')) return 'merge';
+  if (ml.includes('ramp') || ml.includes('exit')) return 'off ramp';
+  if (ml.includes('enter')) return 'on ramp';
+  if (ml.includes('end of road')) return 'end of road';
+  return 'continue';
+}
+
+function showAltRouteOption(altRoute, timeSaved) {
+  const altDiv = document.createElement('div');
+  altDiv.style.cssText = `
+    background: var(--accent-dim); border: 1px solid var(--accent);
+    border-radius: var(--radius); padding: 8px 12px; margin-top: 8px;
+    display: flex; justify-content: space-between; align-items: center;
+    cursor: pointer;
+  `;
+  altDiv.innerHTML = `
+    <div style="font-size:13px;color:var(--accent);">
+      Faster route available <span style="font-weight:700">(${fmtDur(timeSaved)} quicker)</span>
+    </div>
+    <div style="font-size:12px;color:var(--panel-text);font-weight:600;">Use ›</div>
+  `;
+  altDiv.onclick = () => {
+    const route = convertTTRoute(altRoute);
+    drawRoute(route);
+    altDiv.remove();
+  };
+
+  const summary = document.getElementById('summary');
+  const dirToggle = document.getElementById('dirToggle');
+  summary.insertBefore(altDiv, dirToggle);
 }
 
 function drawRoute(route) {
@@ -1465,6 +1757,9 @@ function drawRoute(route) {
 }
 
 function buildInstruction(step) {
+  // Use TomTom's instruction text if available
+  if (step.instruction) return step.instruction;
+
   const m = step.maneuver, road = step.name || step.ref || 'the road';
   switch (m.type) {
     case 'depart': return `Head ${bearingDir(m.bearing_after)} on ${road}`;
