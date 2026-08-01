@@ -595,7 +595,8 @@ function closePoiPopup() {
     map.easeTo({
       center: [currentLng, currentLat],
       bearing: currentBearing,
-      pitch: 60, zoom: 17, duration: 800
+      pitch: 60, zoom: 17, duration: 800,
+      padding: { top: Math.round(window.innerHeight * 0.45), bottom: 0, left: 0, right: 0 }
     });
   } else if (routeCoords && routeCoords.length) {
     // Return to route overview
@@ -986,7 +987,8 @@ function toggleNav() {
     map.easeTo({
       center: [startLng, startLat],
       bearing: currentBearing,
-      pitch: 60, zoom: 17, duration: 800
+      pitch: 60, zoom: 17, duration: 800,
+      padding: { top: Math.round(window.innerHeight * 0.45), bottom: 0, left: 0, right: 0 }
     });
   } else {
     releaseWakeLock();
@@ -1001,7 +1003,7 @@ function toggleNav() {
     document.getElementById('viewToggle').classList.remove('active');
     if (routeCoords && routeCoords.length) {
       const bounds = routeCoords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(routeCoords[0], routeCoords[0]));
-      map.easeTo({ pitch: 0, bearing: 0, duration: 500 });
+      map.easeTo({ pitch: 0, bearing: 0, padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: 500 });
       setTimeout(() => map.fitBounds(bounds, { padding: 60, duration: 800 }), 550);
     }
   }
@@ -1130,7 +1132,8 @@ function updateNavView(lat, lng) {
     bearing: currentBearing,
     pitch: 60,
     zoom: navZoom,
-    duration: 1000
+    duration: 1000,
+    padding: { top: Math.round(window.innerHeight * 0.45), bottom: 0, left: 0, right: 0 }
   });
 }
 
