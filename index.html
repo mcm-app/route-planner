@@ -1340,6 +1340,62 @@ function toggleDir() {
 
 init();
 
+// Handle shared content or URL parameters
+window.addEventListener('load', () => {
+  const params = new URLSearchParams(window.location.search);
+  const shared = params.get('shared') || params.get('dest') || params.get('q');
+  if (!shared) return;
+
+  // Clean the URL so it doesn't persist
+  history.replaceState(null, '', window.location.pathname);
+
+  // Try to parse as coordinates (lat,lng or Google Maps URL)
+  let lat, lng, label;
+
+  // Match coordinates: "52.63,0.95" or "52.63, 0.95"
+  const coordMatch = shared.match(/([-\d.]+)\s*,\s*([-\d.]+)/);
+
+  // Match Google Maps URL with @lat,lng or ?q=lat,lng
+  const gmapMatch = shared.match(/@([-\d.]+),([-\d.]+)/) ||
+                    shared.match(/[?&]q=([-\d.]+),([-\d.]+)/) ||
+                    shared.match(/place\/([-\d.]+),([-\d.]+)/);
+
+  if (gmapMatch) {
+    lat = parseFloat(gmapMatch[1]);
+    lng = parseFloat(gmapMatch[2]);
+    label = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  } else if (coordMatch) {
+    const a = parseFloat(coordMatch[1]);
+    const b = parseFloat(coordMatch[2]);
+    // Determine which is lat/lng (UK coords: lat ~50-58, lng ~-6 to 2)
+    if (a > 40 && a < 70) { lat = a; lng = b; }
+    else { lat = b; lng = a; }
+    label = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  }
+
+  if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
+    // Set as destination with coordinates
+    const dest = stops[stops.length - 1];
+    dest.lat = lat;
+    dest.lng = lng;
+    dest.label = label;
+    render();
+    checkReady();
+    map.flyTo({ center: [lng, lat], zoom: 14, duration: 1000 });
+  } else {
+    // Treat as an address search — put it in the destination input
+    const dest = stops[stops.length - 1];
+    dest.label = shared.trim();
+    render();
+    // Trigger a geocode search
+    const inp = document.querySelector(`[data-id="${dest.id}"]`);
+    if (inp) {
+      inp.value = shared.trim();
+      onInput(inp);
+    }
+  }
+});
+
 // Register service worker for PWA
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
