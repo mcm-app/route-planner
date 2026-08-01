@@ -765,21 +765,22 @@ function doLocate() {
 
 // ── Snap to road & dead reckoning state ──
 let snappedLat = null, snappedLng = null;
-let snappedIdx = 0;          // Index on route coords
-let currentSpeed = 0;         // metres per second
+let snappedIdx = 0;
+let currentSpeed = 0;
 let lastGpsTime = 0;
 let deadReckonTimer = null;
-const GPS_TIMEOUT = 5000;     // Start dead reckoning after 5s without GPS
-const OFF_ROUTE_DIST = 50;    // metres from route before rerouting
-let offRouteCount = 0;        // consecutive off-route readings
+const GPS_TIMEOUT = 5000;
+const OFF_ROUTE_DIST = 50;
+let offRouteCount = 0;
 let isRerouting = false;
+let currentNavZoom = 16; // Smoothed zoom level
+let targetNavZoom = 16;
 
 function onGps(pos) {
   currentLat = pos.coords.latitude;
   currentLng = pos.coords.longitude;
   lastGpsTime = Date.now();
 
-  // Calculate speed from GPS or use reported speed
   if (pos.coords.speed !== null && pos.coords.speed > 0) {
     currentSpeed = pos.coords.speed;
   } else if (prevPos) {
@@ -788,25 +789,20 @@ function onGps(pos) {
     if (dt > 0 && d > 3) currentSpeed = d / dt;
   }
 
-  // Snap to route if navigating
   if (isNav && routeCoords && routeCoords.length > 1) {
     const distFromRoute = snapToRoute(currentLat, currentLng);
 
-    // Auto-recalculate if off route
     if (distFromRoute > OFF_ROUTE_DIST) {
       offRouteCount++;
-      // Need 3 consecutive off-route readings to trigger reroute (avoids GPS glitches)
       if (offRouteCount >= 3 && !isRerouting) {
         autoReroute();
       }
-      // While off route, show actual GPS position not snapped
       showUser(currentLat, currentLng);
     } else {
       offRouteCount = 0;
       showUser(snappedLat, snappedLng);
     }
 
-    // Calculate bearing from route, not GPS
     if (snappedIdx < routeCoords.length - 1) {
       currentBearing = calcBearing(
         routeCoords[snappedIdx][1], routeCoords[snappedIdx][0],
@@ -819,7 +815,6 @@ function onGps(pos) {
     updateTravelledRoute(snappedLat, snappedLng);
     updateRouteBarPosition(snappedLat, snappedLng);
 
-    // Reset dead reckoning timer
     clearInterval(deadReckonTimer);
     deadReckonTimer = setInterval(deadReckon, 1000);
   } else {
@@ -840,29 +835,26 @@ function onGps(pos) {
 }
 
 function snapToRoute(lat, lng) {
-  let bestDist = Infinity, bestIdx = 0;
-  // Search near current snapped position first for performance
-  const searchStart = Math.max(0, snappedIdx - 10);
-  const searchEnd = Math.min(routeCoords.length - 1, snappedIdx + 50);
-
+  // Only search FORWARD from current position (with small backward allowance of 3 points)
+  const searchStart = Math.max(0, snappedIdx - 3);
+  const searchEnd = Math.min(routeCoords.length - 1, snappedIdx + 60);
+  
+  let bestDist = Infinity, bestIdx = snappedIdx;
   for (let i = searchStart; i <= searchEnd; i++) {
     const d = haversine(lat, lng, routeCoords[i][1], routeCoords[i][0]);
     if (d < bestDist) { bestDist = d; bestIdx = i; }
   }
 
-  // If not found nearby, do a wider search
-  if (bestDist > 100) {
-    for (let i = 0; i < routeCoords.length; i++) {
-      const d = haversine(lat, lng, routeCoords[i][1], routeCoords[i][0]);
-      if (d < bestDist) { bestDist = d; bestIdx = i; }
-    }
+  // Only allow moving backwards by 1 point max to prevent jumping back
+  if (bestIdx < snappedIdx - 1) {
+    bestIdx = snappedIdx - 1;
+    bestDist = haversine(lat, lng, routeCoords[bestIdx][1], routeCoords[bestIdx][0]);
   }
 
-  // Interpolate between nearest point and adjacent point for smooth movement
+  // Interpolate between nearest point and next for smooth movement
   if (bestIdx < routeCoords.length - 1) {
     const ax = routeCoords[bestIdx][0], ay = routeCoords[bestIdx][1];
     const bx = routeCoords[bestIdx + 1][0], by = routeCoords[bestIdx + 1][1];
-    // Project GPS position onto the line segment A→B
     const dx = bx - ax, dy = by - ay;
     const segLenSq = dx * dx + dy * dy;
     if (segLenSq > 0) {
@@ -870,7 +862,12 @@ function snapToRoute(lat, lng) {
       t = Math.max(0, Math.min(1, t));
       snappedLng = ax + t * dx;
       snappedLat = ay + t * dy;
-      snappedIdx = bestIdx;
+      // Move to next point if we're past 90% of the segment
+      if (t > 0.9 && bestIdx >= snappedIdx) {
+        snappedIdx = bestIdx + 1;
+      } else {
+        snappedIdx = bestIdx;
+      }
       return bestDist;
     }
   }
@@ -999,7 +996,15 @@ function autoReroute() {
     routeCoords = route.geometry.coordinates;
     routeSteps = [];
     route.legs.forEach(leg => routeSteps.push(...leg.steps));
-    snappedIdx = 0;
+    
+    // Find our position on the new route (don't reset to 0)
+    let bestRerouteIdx = 0, bestRerouteDist = Infinity;
+    for (let i = 0; i < routeCoords.length; i++) {
+      const d = haversine(currentLat, currentLng, routeCoords[i][1], routeCoords[i][0]);
+      if (d < bestRerouteDist) { bestRerouteDist = d; bestRerouteIdx = i; }
+    }
+    snappedIdx = bestRerouteIdx;
+    currentNavZoom = NAV_ZOOM_DEFAULT;
 
     // Redraw route
     map.addSource('route-travelled', {
@@ -1368,30 +1373,36 @@ function hideTurnHighlight() {
 }
 
 function updateNavView(lat, lng) {
-  let navZoom = NAV_ZOOM_DEFAULT;
+  targetNavZoom = NAV_ZOOM_DEFAULT;
 
-  // Find nearest upcoming manoeuvre
   if (routeSteps.length) {
-    // Find the closest step to us (the one we're at or just passed)
-    let nearestIdx = 0, nearestDist = Infinity;
+    // Find the next upcoming manoeuvre that is AHEAD of us on the route
+    let upcoming = null, upDist = Infinity;
+
     for (let i = 0; i < routeSteps.length; i++) {
       const s = routeSteps[i];
-      const d = haversine(lat, lng, s.maneuver.location[1], s.maneuver.location[0]);
-      if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+      if (!s.maneuver || !s.maneuver.location) continue;
+      const sLat = s.maneuver.location[1];
+      const sLng = s.maneuver.location[0];
+
+      // Check if this step is ahead of us by finding its route index
+      let stepIdx = 0, stepBest = Infinity;
+      for (let j = Math.max(0, snappedIdx - 5); j < Math.min(routeCoords.length, snappedIdx + 200); j++) {
+        const dd = Math.abs(routeCoords[j][1] - sLat) + Math.abs(routeCoords[j][0] - sLng);
+        if (dd < stepBest) { stepBest = dd; stepIdx = j; }
+      }
+
+      // Only consider steps AHEAD of current position
+      if (stepIdx <= snappedIdx + 2) continue;
+
+      const d = haversine(lat, lng, sLat, sLng);
+      if (d < upDist) { upDist = d; upcoming = s; }
     }
 
-    // The upcoming step is the next one if we're very close to the nearest
-    const upcoming = nearestDist < 50 && nearestIdx + 1 < routeSteps.length
-      ? routeSteps[nearestIdx + 1] : routeSteps[nearestIdx];
-    const upDist = upcoming === routeSteps[nearestIdx] ? nearestDist
-      : haversine(lat, lng, upcoming.maneuver.location[1], upcoming.maneuver.location[0]);
-
-    // Dynamic zoom: if approaching a turn/roundabout/junction, zoom in gradually
-    if (TURN_TYPES.has(upcoming.maneuver.type) && upDist < ZOOM_START_DIST) {
+    // Only zoom for genuine turn types, and only within range
+    if (upcoming && TURN_TYPES.has(upcoming.maneuver.type) && upDist < ZOOM_START_DIST && upDist > 10) {
       const t = Math.max(0, Math.min(1, 1 - (upDist - ZOOM_MAX_DIST) / (ZOOM_START_DIST - ZOOM_MAX_DIST)));
-      navZoom = NAV_ZOOM_DEFAULT + (NAV_ZOOM_CLOSE - NAV_ZOOM_DEFAULT) * t;
-
-      // Show the turn highlighted in white on the map
+      targetNavZoom = NAV_ZOOM_DEFAULT + (NAV_ZOOM_CLOSE - NAV_ZOOM_DEFAULT) * t;
       showTurnHighlight(upcoming);
     } else {
       hideTurnHighlight();
@@ -1405,8 +1416,11 @@ function updateNavView(lat, lng) {
     }
   }
 
-  // Offset center ahead of user so triangle appears 3/4 down screen
-  const offsetDist = 40; // metres ahead to shift center
+  // Smooth zoom — only move 15% toward target each update (gentle, no sudden jumps)
+  currentNavZoom += (targetNavZoom - currentNavZoom) * 0.15;
+
+  // Offset center ahead of user
+  const offsetDist = 40;
   const bearingRad = currentBearing * Math.PI / 180;
   const R = 6371000;
   const lat1 = lat * Math.PI / 180;
@@ -1422,7 +1436,7 @@ function updateNavView(lat, lng) {
     center: [aheadLng, aheadLat],
     bearing: currentBearing,
     pitch: 60,
-    zoom: navZoom,
+    zoom: currentNavZoom,
     duration: 1000
   });
 }
