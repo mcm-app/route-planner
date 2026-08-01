@@ -1340,6 +1340,9 @@ function toggleDir() {
 
 init();
 
+// Auto-set start to current location on every launch
+autoSetStartToGps();
+
 // Handle shared content or URL parameters
 window.addEventListener('load', () => {
   const params = new URLSearchParams(window.location.search);
