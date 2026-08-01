@@ -4,7 +4,7 @@
   "description": "Mobile route planner with 3D navigation",
   "start_url": "./",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#1a1f2e",
   "theme_color": "#1a1f2e",
   "icons": [
