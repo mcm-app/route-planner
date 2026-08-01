@@ -592,11 +592,23 @@ function closePoiPopup() {
   // Return to whatever mode we were in
   if (isNav && currentLat !== null) {
     // Resume nav view - follow user position
+    // Resume nav view with offset
+    const od = 150;
+    const br = currentBearing * Math.PI / 180;
+    const Re = 6371000;
+    const l1 = currentLat * Math.PI / 180;
+    const o1 = currentLng * Math.PI / 180;
+    const al = Math.asin(Math.sin(l1) * Math.cos(od / Re) +
+      Math.cos(l1) * Math.sin(od / Re) * Math.cos(br)) * 180 / Math.PI;
+    const ol = (o1 + Math.atan2(
+      Math.sin(br) * Math.sin(od / Re) * Math.cos(l1),
+      Math.cos(od / Re) - Math.sin(l1) * Math.sin(al * Math.PI / 180)
+    )) * 180 / Math.PI;
+
     map.easeTo({
-      center: [currentLng, currentLat],
+      center: [ol, al],
       bearing: currentBearing,
-      pitch: 60, zoom: 17, duration: 800,
-      padding: { top: Math.round(window.innerHeight * 0.45), bottom: 0, left: 0, right: 0 }
+      pitch: 60, zoom: 17, duration: 800
     });
   } else if (routeCoords && routeCoords.length) {
     // Return to route overview
@@ -984,11 +996,23 @@ function toggleNav() {
       startLat = map.getCenter().lat;
     }
 
+    // Offset center ahead so triangle appears lower on screen
+    const offDist = 150;
+    const bRad = currentBearing * Math.PI / 180;
+    const Rr = 6371000;
+    const la1 = startLat * Math.PI / 180;
+    const lo1 = startLng * Math.PI / 180;
+    const aLat = Math.asin(Math.sin(la1) * Math.cos(offDist / Rr) +
+      Math.cos(la1) * Math.sin(offDist / Rr) * Math.cos(bRad)) * 180 / Math.PI;
+    const aLng = (lo1 + Math.atan2(
+      Math.sin(bRad) * Math.sin(offDist / Rr) * Math.cos(la1),
+      Math.cos(offDist / Rr) - Math.sin(la1) * Math.sin(aLat * Math.PI / 180)
+    )) * 180 / Math.PI;
+
     map.easeTo({
-      center: [startLng, startLat],
+      center: [aLng, aLat],
       bearing: currentBearing,
-      pitch: 60, zoom: 17, duration: 800,
-      padding: { top: Math.round(window.innerHeight * 0.45), bottom: 0, left: 0, right: 0 }
+      pitch: 60, zoom: 17, duration: 800
     });
   } else {
     releaseWakeLock();
@@ -1003,7 +1027,7 @@ function toggleNav() {
     document.getElementById('viewToggle').classList.remove('active');
     if (routeCoords && routeCoords.length) {
       const bounds = routeCoords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(routeCoords[0], routeCoords[0]));
-      map.easeTo({ pitch: 0, bearing: 0, padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: 500 });
+      map.easeTo({ pitch: 0, bearing: 0, duration: 500 });
       setTimeout(() => map.fitBounds(bounds, { padding: 60, duration: 800 }), 550);
     }
   }
@@ -1127,13 +1151,25 @@ function updateNavView(lat, lng) {
     }
   }
 
+  // Offset center ahead of user so triangle appears 3/4 down screen
+  const offsetDist = 150; // metres ahead to shift center
+  const bearingRad = currentBearing * Math.PI / 180;
+  const R = 6371000;
+  const lat1 = lat * Math.PI / 180;
+  const lng1 = lng * Math.PI / 180;
+  const aheadLat = Math.asin(Math.sin(lat1) * Math.cos(offsetDist / R) +
+    Math.cos(lat1) * Math.sin(offsetDist / R) * Math.cos(bearingRad)) * 180 / Math.PI;
+  const aheadLng = (lng1 + Math.atan2(
+    Math.sin(bearingRad) * Math.sin(offsetDist / R) * Math.cos(lat1),
+    Math.cos(offsetDist / R) - Math.sin(lat1) * Math.sin(aheadLat * Math.PI / 180)
+  )) * 180 / Math.PI;
+
   map.easeTo({
-    center: [lng, lat],
+    center: [aheadLng, aheadLat],
     bearing: currentBearing,
     pitch: 60,
     zoom: navZoom,
-    duration: 1000,
-    padding: { top: Math.round(window.innerHeight * 0.45), bottom: 0, left: 0, right: 0 }
+    duration: 1000
   });
 }
 
