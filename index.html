@@ -1379,6 +1379,18 @@ window.addEventListener('load', () => {
     dest.lat = lat;
     dest.lng = lng;
     dest.label = label;
+
+    // Drop a marker at the destination
+    const markerEl = document.createElement('div');
+    markerEl.innerHTML = `<svg width="30" height="40" viewBox="0 0 30 40" xmlns="http://www.w3.org/2000/svg">
+      <path d="M15 0C6.72 0 0 6.72 0 15c0 11.25 15 25 15 25s15-13.75 15-25C30 6.72 23.28 0 15 0z" fill="#ff5c5c" stroke="#fff" stroke-width="2"/>
+      <text x="15" y="19" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold" font-family="sans-serif">B</text></svg>`;
+    new maplibregl.Marker({ element: markerEl, anchor: 'bottom' })
+      .setLngLat([lng, lat]).addTo(map);
+
+    // Auto-set start to current location
+    autoSetStartToGps();
+
     render();
     checkReady();
     map.flyTo({ center: [lng, lat], zoom: 14, duration: 1000 });
@@ -1386,6 +1398,10 @@ window.addEventListener('load', () => {
     // Treat as an address search — put it in the destination input
     const dest = stops[stops.length - 1];
     dest.label = shared.trim();
+
+    // Auto-set start to current location
+    autoSetStartToGps();
+
     render();
     // Trigger a geocode search
     const inp = document.querySelector(`[data-id="${dest.id}"]`);
@@ -1395,6 +1411,47 @@ window.addEventListener('load', () => {
     }
   }
 });
+
+function autoSetStartToGps() {
+  const start = stops[0];
+
+  if (currentLat !== null && currentLng !== null) {
+    // Already have a GPS fix
+    start.lat = currentLat;
+    start.lng = currentLng;
+    start.label = 'My location';
+    start.isGps = true;
+    render();
+    checkReady();
+  } else {
+    // Get GPS fix
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        currentLat = pos.coords.latitude;
+        currentLng = pos.coords.longitude;
+        showUser(currentLat, currentLng);
+
+        start.lat = currentLat;
+        start.lng = currentLng;
+        start.label = 'My location';
+        start.isGps = true;
+        render();
+        checkReady();
+
+        // Start tracking
+        if (!isLocating) {
+          isLocating = true;
+          document.getElementById('locateBtn').classList.add('on');
+          gpsWatchId = navigator.geolocation.watchPosition(onGps, () => {},
+            { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+        }
+      },
+      () => {},
+      { enableHighAccuracy: true, timeout: 20000 }
+    );
+  }
+}
 
 // Register service worker for PWA
 if ('serviceWorker' in navigator) {
