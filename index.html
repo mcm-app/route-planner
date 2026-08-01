@@ -1513,8 +1513,17 @@ function calcRoute() {
 
   fetch(url).then(r => r.json()).then(data => {
     document.getElementById('spin').classList.remove('on');
+
+    if (data.error) {
+      alert('TomTom error: ' + (data.error.description || data.error.message || JSON.stringify(data.error)));
+      return;
+    }
+    if (data.detailedError) {
+      alert('TomTom error: ' + (data.detailedError.message || JSON.stringify(data.detailedError)));
+      return;
+    }
     if (!data.routes || !data.routes.length) {
-      alert('Could not find a route between those locations.');
+      alert('No route found. TomTom response: ' + JSON.stringify(data).substring(0, 200));
       return;
     }
     // Convert TomTom response to our internal format
