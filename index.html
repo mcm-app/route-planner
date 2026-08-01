@@ -16,16 +16,16 @@
   :root {
     --panel-bg: #1a1f2e;
     --panel-text: #e8e8ec;
-    --accent: #3b9cff;
-    --accent-dim: rgba(59,156,255,0.15);
+    --accent: #4a90d9;
+    --accent-dim: rgba(74,144,217,0.15);
     --input-bg: #252b3b;
     --input-border: #3a4158;
     --chip-bg: #2a3145;
     --danger: #ff5c5c;
     --muted: #8890a4;
     --green: #22c55e;
-    --route-green: #5bc0fa;
-    --route-pale: rgba(91,192,250,0.3);
+    --route-green: #4a90d9;
+    --route-pale: rgba(74,144,217,0.3);
     --amber: #f59e0b;
     --radius: 8px;
     --safe-top: env(safe-area-inset-top, 0px);
@@ -397,10 +397,10 @@ const map = new maplibregl.Map({
       'tomtom-base': {
         type: 'raster',
         tiles: [
-          `https://a.api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512`,
-          `https://b.api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512`,
-          `https://c.api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512`,
-          `https://d.api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512`
+          `https://a.api.tomtom.com/maps/orbis/map-display/tile/{z}/{x}/{y}.png?apiVersion=1&style=street-light&key=${ttMapKey}&tileSize=512`,
+          `https://b.api.tomtom.com/maps/orbis/map-display/tile/{z}/{x}/{y}.png?apiVersion=1&style=street-light&key=${ttMapKey}&tileSize=512`,
+          `https://c.api.tomtom.com/maps/orbis/map-display/tile/{z}/{x}/{y}.png?apiVersion=1&style=street-light&key=${ttMapKey}&tileSize=512`,
+          `https://d.api.tomtom.com/maps/orbis/map-display/tile/{z}/{x}/{y}.png?apiVersion=1&style=street-light&key=${ttMapKey}&tileSize=512`
         ],
         tileSize: 256,
         attribution: '© <a href="https://www.tomtom.com/copyright">TomTom</a>'
@@ -408,17 +408,14 @@ const map = new maplibregl.Map({
       'tomtom-traffic': {
         type: 'raster',
         tiles: [
-          `https://a.api.tomtom.com/traffic/map/4/tile/flow/relative/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512&thickness=6`,
-          `https://b.api.tomtom.com/traffic/map/4/tile/flow/relative/{z}/{x}/{y}.png?key=${ttMapKey}&tileSize=512&thickness=6`
+          `https://a.api.tomtom.com/maps/orbis/traffic/tile/flow/{z}/{x}/{y}.png?apiVersion=1&style=light&key=${ttMapKey}&tileSize=512`,
+          `https://b.api.tomtom.com/maps/orbis/traffic/tile/flow/{z}/{x}/{y}.png?apiVersion=1&style=light&key=${ttMapKey}&tileSize=512`
         ],
         tileSize: 256
       }
     },
     layers: [
-      { id: 'tomtom-tiles', type: 'raster', source: 'tomtom-base', minzoom: 0, maxzoom: 22 },
-      { id: 'traffic-flow', type: 'raster', source: 'tomtom-traffic', minzoom: 8, maxzoom: 22,
-        paint: { 'raster-opacity': 0.7 }
-      }
+      { id: 'tomtom-tiles', type: 'raster', source: 'tomtom-base', minzoom: 0, maxzoom: 22 }
     ]
   },
   center: [0.95, 52.63],
@@ -427,7 +424,45 @@ const map = new maplibregl.Map({
 
 map.addControl(new maplibregl.NavigationControl({ showCompass: true, showZoom: true }), 'bottom-left');
 
-map.on('load', () => { mapReady = true; });
+// Add traffic overlay on top of everything
+function ensureTrafficLayer() {
+  if (map.getLayer('traffic-flow')) map.removeLayer('traffic-flow');
+  map.addLayer({
+    id: 'traffic-flow', type: 'raster', source: 'tomtom-traffic',
+    minzoom: 8, maxzoom: 22,
+    paint: { 'raster-opacity': 0.75 }
+  });
+}
+
+// Create chevron arrow image for route direction
+function createArrowImage() {
+  if (map.hasImage('route-arrow')) return;
+  const size = 24;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, size, size);
+  // Draw chevron arrow pointing right (MapLibre rotates to follow line)
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(8, 4);
+  ctx.lineTo(16, 12);
+  ctx.lineTo(8, 20);
+  ctx.stroke();
+  const imgData = ctx.getImageData(0, 0, size, size);
+  map.addImage('route-arrow', imgData, { sdf: false });
+}
+
+function addRouteArrows() {
+  // Arrows only shown at turns via the turn highlight system
+  // No full-route arrows needed
+}
+
+map.on('load', () => { mapReady = true; ensureTrafficLayer(); });
 
 // Tap map to toggle route summary
 map.on('click', () => {
@@ -962,10 +997,10 @@ function autoReroute() {
     const route = convertTTRoute(data.routes[0]);
 
     // Clear old route layers
-    ['route-travelled-line', 'route-outline', 'route-line', 'turn-highlight-line', 'turn-highlight-glow'].forEach(id => {
+    ['route-travelled-line', 'route-outline', 'route-line', 'route-arrows', 'turn-highlight-line', 'turn-highlight-glow'].forEach(id => {
       if (map.getLayer(id)) map.removeLayer(id);
     });
-    ['route', 'route-travelled', 'turn-highlight'].forEach(id => {
+    ['route', 'route-travelled', 'route-arrows-src', 'turn-highlight'].forEach(id => {
       if (map.getSource(id)) map.removeSource(id);
     });
     turnHighlightActive = false;
@@ -987,18 +1022,22 @@ function autoReroute() {
     map.addLayer({
       id: 'route-outline', type: 'line', source: 'route',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#1a4a6e', 'line-width': 9, 'line-opacity': 0.4 }
+      paint: { 'line-color': '#2563a8', 'line-width': 16, 'line-opacity': 0.4 }
     });
     map.addLayer({
       id: 'route-line', type: 'line', source: 'route',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#5bc0fa', 'line-width': 6, 'line-opacity': 0.9 }
+      paint: { 'line-color': '#4a90d9', 'line-width': 12, 'line-opacity': 0.9 }
     });
     map.addLayer({
       id: 'route-travelled-line', type: 'line', source: 'route-travelled',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': 'rgba(91,192,250,0.3)', 'line-width': 6, 'line-opacity': 1 }
+      paint: { 'line-color': 'rgba(74,144,217,0.3)', 'line-width': 12, 'line-opacity': 1 }
     });
+
+    // Traffic overlay on top
+    ensureTrafficLayer();
+    addRouteArrows();
 
     // Update summary
     let totalSec = 0, totalM = 0;
@@ -1228,6 +1267,7 @@ const ZOOM_START_DIST = 400;  // Start zooming in at 400m
 const ZOOM_MAX_DIST = 50;     // Fully zoomed at 50m
 const TURN_TYPES = new Set(['turn', 'end of road', 'roundabout', 'rotary', 'fork', 'on ramp', 'off ramp']);
 let turnHighlightActive = false;
+let turnArrowMarker = null;
 
 function ensureTurnHighlightLayer() {
   if (!map.getSource('turn-highlight')) {
@@ -1235,17 +1275,15 @@ function ensureTurnHighlightLayer() {
       type: 'geojson',
       data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [[0,0],[0,0]] } }
     });
-    // White glow outline
     map.addLayer({
       id: 'turn-highlight-glow', type: 'line', source: 'turn-highlight',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': 'rgba(255,255,255,0.3)', 'line-width': 14, 'line-opacity': 1 }
+      paint: { 'line-color': 'rgba(255,255,255,0.3)', 'line-width': 18, 'line-opacity': 1 }
     });
-    // White line on top
     map.addLayer({
       id: 'turn-highlight-line', type: 'line', source: 'turn-highlight',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#ffffff', 'line-width': 6, 'line-opacity': 0.95 }
+      paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.95 }
     });
   }
 }
@@ -1253,7 +1291,6 @@ function ensureTurnHighlightLayer() {
 function showTurnHighlight(step) {
   ensureTurnHighlightLayer();
 
-  // Find the maneuver point on the route
   const mLat = step.maneuver.location[1];
   const mLng = step.maneuver.location[0];
 
@@ -1263,16 +1300,13 @@ function showTurnHighlight(step) {
     if (d < bestDist) { bestDist = d; bestIdx = i; }
   }
 
-  // Walk backwards 30m to find start of highlight
-  let startIdx = bestIdx;
-  let dist = 0;
+  let startIdx = bestIdx, dist = 0;
   while (startIdx > 0 && dist < 30) {
     startIdx--;
     dist += haversine(routeCoords[startIdx][1], routeCoords[startIdx][0],
       routeCoords[startIdx + 1][1], routeCoords[startIdx + 1][0]);
   }
 
-  // Walk forwards 30m to find end of highlight
   let endIdx = bestIdx;
   dist = 0;
   while (endIdx < routeCoords.length - 1 && dist < 30) {
@@ -1288,6 +1322,24 @@ function showTurnHighlight(step) {
     type: 'Feature',
     geometry: { type: 'LineString', coordinates: turnCoords }
   });
+
+  // Direction arrow at the turn point
+  if (turnArrowMarker) turnArrowMarker.remove();
+  let arrowBearing = 0;
+  if (bestIdx < routeCoords.length - 2) {
+    arrowBearing = calcBearing(
+      routeCoords[bestIdx][1], routeCoords[bestIdx][0],
+      routeCoords[Math.min(bestIdx + 3, routeCoords.length - 1)][1],
+      routeCoords[Math.min(bestIdx + 3, routeCoords.length - 1)][0]
+    );
+  }
+  const arrowEl = document.createElement('div');
+  arrowEl.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" style="transform:rotate(${arrowBearing}deg);filter:drop-shadow(0 1px 3px rgba(0,0,0,0.4))">
+    <path d="M12 2 L20 18 L12 13 L4 18 Z" fill="white" opacity="0.95"/>
+  </svg>`;
+  turnArrowMarker = new maplibregl.Marker({ element: arrowEl, anchor: 'center' })
+    .setLngLat([mLng, mLat]).addTo(map);
+
   turnHighlightActive = true;
 }
 
@@ -1299,6 +1351,7 @@ function hideTurnHighlight() {
       geometry: { type: 'LineString', coordinates: [[0,0],[0,0]] }
     });
   }
+  if (turnArrowMarker) { turnArrowMarker.remove(); turnArrowMarker = null; }
   turnHighlightActive = false;
 }
 
@@ -1365,10 +1418,10 @@ function updateNavView(lat, lng) {
 // ── Clear route ──
 function clearRoute() {
   // Remove route layers
-  ['route-travelled-line', 'route-outline', 'route-line', 'turn-highlight-line', 'turn-highlight-glow'].forEach(id => {
+  ['route-travelled-line', 'route-outline', 'route-line', 'route-arrows', 'turn-highlight-line', 'turn-highlight-glow'].forEach(id => {
     if (map.getLayer(id)) map.removeLayer(id);
   });
-  ['route', 'route-travelled', 'turn-highlight'].forEach(id => {
+  ['route', 'route-travelled', 'route-arrows-src', 'turn-highlight'].forEach(id => {
     if (map.getSource(id)) map.removeSource(id);
   });
   turnHighlightActive = false;
@@ -1692,10 +1745,10 @@ function showAltRouteOption(altRoute, timeSaved) {
 
 function drawRoute(route) {
   // Clear old
-  ['route-travelled-line', 'route-outline', 'route-line', 'turn-highlight-line', 'turn-highlight-glow'].forEach(id => {
+  ['route-travelled-line', 'route-outline', 'route-line', 'route-arrows', 'turn-highlight-line', 'turn-highlight-glow'].forEach(id => {
     if (map.getLayer(id)) map.removeLayer(id);
   });
-  ['route', 'route-travelled', 'turn-highlight'].forEach(id => {
+  ['route', 'route-travelled', 'route-arrows-src', 'turn-highlight'].forEach(id => {
     if (map.getSource(id)) map.removeSource(id);
   });
   turnHighlightActive = false;
@@ -1722,22 +1775,28 @@ function drawRoute(route) {
   map.addLayer({
     id: 'route-outline', type: 'line', source: 'route',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint: { 'line-color': '#1a4a6e', 'line-width': 9, 'line-opacity': 0.4 }
+    paint: { 'line-color': '#2563a8', 'line-width': 16, 'line-opacity': 0.4 }
   });
 
   // Main route — bright green
   map.addLayer({
     id: 'route-line', type: 'line', source: 'route',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint: { 'line-color': '#5bc0fa', 'line-width': 6, 'line-opacity': 0.9 }
+    paint: { 'line-color': '#4a90d9', 'line-width': 12, 'line-opacity': 0.9 }
   });
 
-  // Travelled route — pale green on top
+  // Travelled route — pale on top
   map.addLayer({
     id: 'route-travelled-line', type: 'line', source: 'route-travelled',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint: { 'line-color': 'rgba(91,192,250,0.3)', 'line-width': 6, 'line-opacity': 1 }
+    paint: { 'line-color': 'rgba(74,144,217,0.3)', 'line-width': 12, 'line-opacity': 1 }
   });
+
+  // Traffic overlay on top of route
+  ensureTrafficLayer();
+
+  // Direction chevrons along route
+  addRouteArrows();
 
   // Stop markers
   stops.forEach((s, i) => {
