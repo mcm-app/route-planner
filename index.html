@@ -593,7 +593,7 @@ function closePoiPopup() {
   if (isNav && currentLat !== null) {
     // Resume nav view - follow user position
     // Resume nav view with offset
-    const od = 60;
+    const od = 25;
     const br = currentBearing * Math.PI / 180;
     const Re = 6371000;
     const l1 = currentLat * Math.PI / 180;
@@ -997,7 +997,7 @@ function toggleNav() {
     }
 
     // Offset center ahead so triangle appears lower on screen
-    const offDist = 60;
+    const offDist = 25;
     const bRad = currentBearing * Math.PI / 180;
     const Rr = 6371000;
     const la1 = startLat * Math.PI / 180;
@@ -1152,7 +1152,7 @@ function updateNavView(lat, lng) {
   }
 
   // Offset center ahead of user so triangle appears 3/4 down screen
-  const offsetDist = 60; // metres ahead to shift center
+  const offsetDist = 25; // metres ahead to shift center
   const bearingRad = currentBearing * Math.PI / 180;
   const R = 6371000;
   const lat1 = lat * Math.PI / 180;
