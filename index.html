@@ -660,7 +660,7 @@ function closePoiPopup() {
     map.easeTo({
       center: [ol, al],
       bearing: currentBearing,
-      pitch: 60, zoom: 17, duration: 800
+      pitch: 60, zoom: 16, duration: 800
     });
   } else if (routeCoords && routeCoords.length) {
     // Return to route overview
@@ -989,10 +989,10 @@ function autoReroute() {
     const route = convertTTRoute(data.routes[0]);
 
     // Clear old route layers
-    ['route-travelled-line', 'route-outline', 'route-line', 'route-arrows', 'turn-highlight-line', 'turn-highlight-glow'].forEach(id => {
+    ['route-travelled-line', 'route-outline', 'route-line', 'route-arrows', 'turn-highlight-line', 'turn-highlight-glow', 'turn-arrow-layer'].forEach(id => {
       if (map.getLayer(id)) map.removeLayer(id);
     });
-    ['route', 'route-travelled', 'route-arrows-src', 'turn-highlight'].forEach(id => {
+    ['route', 'route-travelled', 'route-arrows-src', 'turn-highlight', 'turn-arrow-src'].forEach(id => {
       if (map.getSource(id)) map.removeSource(id);
     });
     turnHighlightActive = false;
@@ -1232,7 +1232,7 @@ function toggleNav() {
     map.easeTo({
       center: [aLng, aLat],
       bearing: currentBearing,
-      pitch: 60, zoom: 17, duration: 800
+      pitch: 60, zoom: 16, duration: 800
     });
   } else {
     releaseWakeLock();
@@ -1253,13 +1253,12 @@ function toggleNav() {
   }
 }
 
-const NAV_ZOOM_DEFAULT = 17;
-const NAV_ZOOM_CLOSE = 18.5;
+const NAV_ZOOM_DEFAULT = 16;
+const NAV_ZOOM_CLOSE = 17.5;
 const ZOOM_START_DIST = 400;  // Start zooming in at 400m
 const ZOOM_MAX_DIST = 50;     // Fully zoomed at 50m
 const TURN_TYPES = new Set(['turn', 'end of road', 'roundabout', 'rotary', 'fork', 'on ramp', 'off ramp']);
 let turnHighlightActive = false;
-let turnArrowMarker = null;
 
 function ensureTurnHighlightLayer() {
   if (!map.getSource('turn-highlight')) {
@@ -1276,6 +1275,27 @@ function ensureTurnHighlightLayer() {
       id: 'turn-highlight-line', type: 'line', source: 'turn-highlight',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.95 }
+    });
+  }
+  // Arrow source for the endpoint
+  if (!map.getSource('turn-arrow-src')) {
+    map.addSource('turn-arrow-src', {
+      type: 'geojson',
+      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [[0,0],[0,0]] } }
+    });
+    createArrowImage();
+    map.addLayer({
+      id: 'turn-arrow-layer', type: 'symbol', source: 'turn-arrow-src',
+      layout: {
+        'symbol-placement': 'line',
+        'icon-image': 'route-arrow',
+        'icon-size': 1,
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+        'icon-rotation-alignment': 'map',
+        'symbol-spacing': 1
+      },
+      paint: { 'icon-opacity': 0.95 }
     });
   }
 }
@@ -1315,22 +1335,15 @@ function showTurnHighlight(step) {
     geometry: { type: 'LineString', coordinates: turnCoords }
   });
 
-  // Direction arrow at the turn point
-  if (turnArrowMarker) turnArrowMarker.remove();
-  let arrowBearing = 0;
-  if (bestIdx < routeCoords.length - 2) {
-    arrowBearing = calcBearing(
-      routeCoords[bestIdx][1], routeCoords[bestIdx][0],
-      routeCoords[Math.min(bestIdx + 3, routeCoords.length - 1)][1],
-      routeCoords[Math.min(bestIdx + 3, routeCoords.length - 1)][0]
-    );
+  // Arrow at exit end of the turn - use the last few points
+  const arrowStart = Math.max(0, turnCoords.length - 3);
+  const arrowCoords = turnCoords.slice(arrowStart);
+  if (arrowCoords.length >= 2) {
+    map.getSource('turn-arrow-src').setData({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: arrowCoords }
+    });
   }
-  const arrowEl = document.createElement('div');
-  arrowEl.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" style="transform:rotate(${arrowBearing}deg);filter:drop-shadow(0 1px 3px rgba(0,0,0,0.4))">
-    <path d="M12 2 L20 18 L12 13 L4 18 Z" fill="white" opacity="0.95"/>
-  </svg>`;
-  turnArrowMarker = new maplibregl.Marker({ element: arrowEl, anchor: 'center' })
-    .setLngLat([mLng, mLat]).addTo(map);
 
   turnHighlightActive = true;
 }
@@ -1343,7 +1356,12 @@ function hideTurnHighlight() {
       geometry: { type: 'LineString', coordinates: [[0,0],[0,0]] }
     });
   }
-  if (turnArrowMarker) { turnArrowMarker.remove(); turnArrowMarker = null; }
+  if (map.getSource('turn-arrow-src')) {
+    map.getSource('turn-arrow-src').setData({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: [[0,0],[0,0]] }
+    });
+  }
   turnHighlightActive = false;
 }
 
@@ -1410,10 +1428,10 @@ function updateNavView(lat, lng) {
 // ── Clear route ──
 function clearRoute() {
   // Remove route layers
-  ['route-travelled-line', 'route-outline', 'route-line', 'route-arrows', 'turn-highlight-line', 'turn-highlight-glow'].forEach(id => {
+  ['route-travelled-line', 'route-outline', 'route-line', 'route-arrows', 'turn-highlight-line', 'turn-highlight-glow', 'turn-arrow-layer'].forEach(id => {
     if (map.getLayer(id)) map.removeLayer(id);
   });
-  ['route', 'route-travelled', 'route-arrows-src', 'turn-highlight'].forEach(id => {
+  ['route', 'route-travelled', 'route-arrows-src', 'turn-highlight', 'turn-arrow-src'].forEach(id => {
     if (map.getSource(id)) map.removeSource(id);
   });
   turnHighlightActive = false;
@@ -1737,10 +1755,10 @@ function showAltRouteOption(altRoute, timeSaved) {
 
 function drawRoute(route) {
   // Clear old
-  ['route-travelled-line', 'route-outline', 'route-line', 'route-arrows', 'turn-highlight-line', 'turn-highlight-glow'].forEach(id => {
+  ['route-travelled-line', 'route-outline', 'route-line', 'route-arrows', 'turn-highlight-line', 'turn-highlight-glow', 'turn-arrow-layer'].forEach(id => {
     if (map.getLayer(id)) map.removeLayer(id);
   });
-  ['route', 'route-travelled', 'route-arrows-src', 'turn-highlight'].forEach(id => {
+  ['route', 'route-travelled', 'route-arrows-src', 'turn-highlight', 'turn-arrow-src'].forEach(id => {
     if (map.getSource(id)) map.removeSource(id);
   });
   turnHighlightActive = false;
