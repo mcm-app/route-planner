@@ -1,4 +1,4 @@
-const CACHE_NAME = 'route-planner-v1';
+const CACHE_NAME = 'route-planner-v2';
 const ASSETS = [
   './',
   './index.html',
