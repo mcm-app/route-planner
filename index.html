@@ -977,6 +977,43 @@ function showUserDot(lat, lng) {
   }
 }
 
+function deadReckon() {
+  if (!isNav || !routeCoords || currentSpeed < 1) return;
+  const timeSinceGps = Date.now() - lastGpsTime;
+  if (timeSinceGps < GPS_TIMEOUT) return;
+
+  let distToMove = currentSpeed * 1;
+  let idx = snappedIdx;
+
+  while (distToMove > 0 && idx < routeCoords.length - 1) {
+    const segDist = haversine(
+      routeCoords[idx][1], routeCoords[idx][0],
+      routeCoords[idx + 1][1], routeCoords[idx + 1][0]
+    );
+    if (distToMove >= segDist) {
+      distToMove -= segDist;
+      idx++;
+    } else {
+      break;
+    }
+  }
+
+  snappedIdx = idx;
+  snappedLat = routeCoords[snappedIdx][1];
+  snappedLng = routeCoords[snappedIdx][0];
+
+  if (snappedIdx < routeCoords.length - 1) {
+    currentBearing = calcBearing(
+      routeCoords[snappedIdx][1], routeCoords[snappedIdx][0],
+      routeCoords[snappedIdx + 1][1], routeCoords[snappedIdx + 1][0]
+    );
+  }
+
+  moveMapNav(snappedLat, snappedLng);
+  updateTravelledRoute(snappedLat, snappedLng);
+  updateRouteBarPosition(snappedLat, snappedLng);
+}
+
 
 
 function useMyLocation(stopId) {
@@ -986,7 +1023,7 @@ function useMyLocation(stopId) {
     navigator.geolocation.getCurrentPosition(pos => {
       currentLat = pos.coords.latitude;
       currentLng = pos.coords.longitude;
-      showUser(currentLat, currentLng);
+      showUserDot(currentLat, currentLng);
       setStopToGps(stopId);
       if (!isLocating) {
         isLocating = true;
@@ -1291,6 +1328,8 @@ function clearRoute() {
     document.getElementById('navBtn').textContent = '▶ Drive';
     document.getElementById('navBtn').classList.remove('active');
     document.getElementById('turnBubble').classList.remove('visible');
+    document.getElementById('userArrow').classList.remove('visible');
+    document.getElementById('speedWidget').classList.remove('visible');
     is3D = false;
     map.easeTo({ pitch: 0, bearing: 0, duration: 500 });
   }
@@ -1871,7 +1910,7 @@ function autoSetStartToGps() {
       pos => {
         currentLat = pos.coords.latitude;
         currentLng = pos.coords.longitude;
-        showUser(currentLat, currentLng);
+        showUserDot(currentLat, currentLng);
 
         start.lat = currentLat;
         start.lng = currentLng;
