@@ -272,6 +272,30 @@
   .poi-btn-cancel { background: var(--input-bg); color: var(--panel-text); border: 1px solid var(--input-border) !important; }
 
   .maplibregl-ctrl-bottom-left .maplibregl-ctrl-attrib { font-size: 9px !important; }
+
+  /* ── Speed widget ── */
+  #speedWidget {
+    position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+    z-index: 800; display: none; align-items: center; gap: 10px;
+  }
+  #speedWidget.visible { display: flex; }
+  .speed-circle {
+    width: 56px; height: 56px; border-radius: 50%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-family: -apple-system, sans-serif;
+  }
+  .speed-current {
+    background: var(--panel-bg); border: 2px solid var(--panel-text);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+  .speed-current .speed-val { font-size: 20px; font-weight: 800; color: var(--panel-text); line-height: 1; }
+  .speed-current .speed-unit { font-size: 8px; color: var(--muted); margin-top: 1px; }
+  .speed-limit {
+    background: #fff; border: 3px solid #cc0000;
+  }
+  .speed-limit .speed-val { font-size: 20px; font-weight: 800; color: #000; line-height: 1; }
+  .speed-over .speed-current { border-color: #cc0000; }
+  .speed-over .speed-current .speed-val { color: #cc0000; }
   .maplibregl-ctrl-attrib { background: none !important; font-size: 0 !important; }
   .maplibregl-ctrl-attrib.maplibregl-compact { min-height: 14px !important; width: 14px !important; opacity: 0.25; }
   .maplibregl-ctrl-attrib-button { background-color: rgba(26,31,46,0.4) !important; background-size: 10px !important; }
@@ -337,6 +361,16 @@
 <div id="turnBubble">
   <div id="tbDist"></div>
   <div id="tbInstr"></div>
+</div>
+
+<div id="speedWidget">
+  <div class="speed-circle speed-limit" id="speedLimitCircle">
+    <div class="speed-val" id="speedLimitVal">--</div>
+  </div>
+  <div class="speed-circle speed-current">
+    <div class="speed-val" id="speedCurrentVal">0</div>
+    <div class="speed-unit">mph</div>
+  </div>
 </div>
 
 <div id="poiPopup">
@@ -481,6 +515,41 @@ let isLocating = false;
 let currentLat = null, currentLng = null;
 let totalRouteLength = 0;
 let routePOIs = [];
+let speedLimits = []; // Array of {startIdx, endIdx, limit} along route
+
+// ── Speed display ──
+function updateSpeedDisplay() {
+  if (!isNav) return;
+  const mph = Math.round(currentSpeedKmh * 0.621371);
+  document.getElementById('speedCurrentVal').textContent = mph;
+
+  // Find current speed limit from route data
+  let limitMph = null;
+  for (const sl of speedLimits) {
+    if (snappedIdx >= sl.startIdx && snappedIdx <= sl.endIdx) {
+      limitMph = Math.round(sl.limit * 0.621371);
+      break;
+    }
+  }
+
+  const limitEl = document.getElementById('speedLimitVal');
+  const widget = document.getElementById('speedWidget');
+  const limitCircle = document.getElementById('speedLimitCircle');
+
+  if (limitMph !== null) {
+    limitEl.textContent = limitMph;
+    limitCircle.style.display = 'flex';
+    // Highlight if over speed limit
+    if (mph > limitMph + 2) {
+      widget.classList.add('speed-over');
+    } else {
+      widget.classList.remove('speed-over');
+    }
+  } else {
+    limitCircle.style.display = 'none';
+    widget.classList.remove('speed-over');
+  }
+}
 
 // ── Route bar POI search ──
 function searchRoutePOIs() {
@@ -763,55 +832,62 @@ function doLocate() {
   );
 }
 
-// ── Snap to road & dead reckoning state ──
+// ── Snap to road & navigation state ──
 let snappedLat = null, snappedLng = null;
 let snappedIdx = 0;
-let currentSpeed = 0;
+let currentSpeed = 0;         // m/s
+let currentSpeedKmh = 0;      // km/h for display
 let lastGpsTime = 0;
 let deadReckonTimer = null;
 const GPS_TIMEOUT = 5000;
 const OFF_ROUTE_DIST = 50;
 let offRouteCount = 0;
 let isRerouting = false;
-let currentNavZoom = 16; // Smoothed zoom level
+let currentNavZoom = 16;
 let targetNavZoom = 16;
+let smoothLat = null, smoothLng = null;  // Smoothed map center
+let smoothBearing = 0;
+let navAnimFrame = null;
 
 function onGps(pos) {
   currentLat = pos.coords.latitude;
   currentLng = pos.coords.longitude;
   lastGpsTime = Date.now();
 
-  if (pos.coords.speed !== null && pos.coords.speed > 0) {
+  // Speed from GPS
+  if (pos.coords.speed !== null && pos.coords.speed >= 0) {
     currentSpeed = pos.coords.speed;
   } else if (prevPos) {
     const d = haversine(prevPos.lat, prevPos.lng, currentLat, currentLng);
     const dt = (Date.now() - (prevPos.time || Date.now())) / 1000;
-    if (dt > 0 && d > 3) currentSpeed = d / dt;
+    if (dt > 0.5 && d > 2) currentSpeed = d / dt;
   }
+  currentSpeedKmh = Math.round(currentSpeed * 3.6);
+  updateSpeedDisplay();
 
   if (isNav && routeCoords && routeCoords.length > 1) {
     const distFromRoute = snapToRoute(currentLat, currentLng);
 
     if (distFromRoute > OFF_ROUTE_DIST) {
       offRouteCount++;
-      if (offRouteCount >= 3 && !isRerouting) {
-        autoReroute();
-      }
+      if (offRouteCount >= 3 && !isRerouting) autoReroute();
       showUser(currentLat, currentLng);
     } else {
       offRouteCount = 0;
       showUser(snappedLat, snappedLng);
     }
 
-    if (snappedIdx < routeCoords.length - 1) {
+    // Get bearing from route direction, not GPS
+    if (snappedIdx < routeCoords.length - 2) {
+      const lookAhead = Math.min(snappedIdx + 5, routeCoords.length - 1);
       currentBearing = calcBearing(
         routeCoords[snappedIdx][1], routeCoords[snappedIdx][0],
-        routeCoords[snappedIdx + 1][1], routeCoords[snappedIdx + 1][0]
+        routeCoords[lookAhead][1], routeCoords[lookAhead][0]
       );
     }
 
     if (userMarkerEl) userMarkerEl.style.transform = `rotate(${currentBearing}deg)`;
-    updateNavView(snappedLat, snappedLng);
+    updateNavTarget(snappedLat, snappedLng);
     updateTravelledRoute(snappedLat, snappedLng);
     updateRouteBarPosition(snappedLat, snappedLng);
 
@@ -822,7 +898,7 @@ function onGps(pos) {
 
     if (prevPos) {
       const d = haversine(prevPos.lat, prevPos.lng, currentLat, currentLng);
-      if (d > 5) {
+      if (d > 3) {
         currentBearing = calcBearing(prevPos.lat, prevPos.lng, currentLat, currentLng);
         if (userMarkerEl) userMarkerEl.style.transform = `rotate(${currentBearing}deg)`;
       }
@@ -835,47 +911,113 @@ function onGps(pos) {
 }
 
 function snapToRoute(lat, lng) {
-  // Only search FORWARD from current position (with small backward allowance of 3 points)
-  const searchStart = Math.max(0, snappedIdx - 3);
-  const searchEnd = Math.min(routeCoords.length - 1, snappedIdx + 60);
-  
+  // Simple forward-only nearest point search - no interpolation
+  const searchStart = Math.max(0, snappedIdx - 2);
+  const searchEnd = Math.min(routeCoords.length - 1, snappedIdx + 80);
+
   let bestDist = Infinity, bestIdx = snappedIdx;
   for (let i = searchStart; i <= searchEnd; i++) {
     const d = haversine(lat, lng, routeCoords[i][1], routeCoords[i][0]);
     if (d < bestDist) { bestDist = d; bestIdx = i; }
   }
 
-  // Only allow moving backwards by 1 point max to prevent jumping back
-  if (bestIdx < snappedIdx - 1) {
-    bestIdx = snappedIdx - 1;
-    bestDist = haversine(lat, lng, routeCoords[bestIdx][1], routeCoords[bestIdx][0]);
+  // Never go backwards more than 1 point
+  if (bestIdx < snappedIdx - 1) bestIdx = snappedIdx;
+
+  // Only advance if the new point is genuinely closer to GPS
+  if (bestIdx >= snappedIdx) {
+    snappedIdx = bestIdx;
   }
 
-  // Interpolate between nearest point and next for smooth movement
-  if (bestIdx < routeCoords.length - 1) {
-    const ax = routeCoords[bestIdx][0], ay = routeCoords[bestIdx][1];
-    const bx = routeCoords[bestIdx + 1][0], by = routeCoords[bestIdx + 1][1];
-    const dx = bx - ax, dy = by - ay;
-    const segLenSq = dx * dx + dy * dy;
-    if (segLenSq > 0) {
-      let t = ((lng - ax) * dx + (lat - ay) * dy) / segLenSq;
-      t = Math.max(0, Math.min(1, t));
-      snappedLng = ax + t * dx;
-      snappedLat = ay + t * dy;
-      // Move to next point if we're past 90% of the segment
-      if (t > 0.9 && bestIdx >= snappedIdx) {
-        snappedIdx = bestIdx + 1;
-      } else {
-        snappedIdx = bestIdx;
+  snappedLat = routeCoords[snappedIdx][1];
+  snappedLng = routeCoords[snappedIdx][0];
+  return bestDist;
+}
+
+// ── Smooth animation loop — updates map position gradually ──
+function updateNavTarget(lat, lng) {
+  // Set targets for the animation loop
+  if (smoothLat === null) { smoothLat = lat; smoothLng = lng; smoothBearing = currentBearing; }
+
+  // Find upcoming manoeuvre for zoom
+  targetNavZoom = NAV_ZOOM_DEFAULT;
+  if (routeSteps.length) {
+    let upcoming = null, upDist = Infinity;
+    for (let i = 0; i < routeSteps.length; i++) {
+      const s = routeSteps[i];
+      if (!s.maneuver || !s.maneuver.location) continue;
+      const sLat = s.maneuver.location[1];
+      const sLng = s.maneuver.location[0];
+
+      // Only steps ahead
+      let stepIdx = 0, stepBest = Infinity;
+      for (let j = Math.max(0, snappedIdx); j < Math.min(routeCoords.length, snappedIdx + 200); j++) {
+        const dd = Math.abs(routeCoords[j][1] - sLat) + Math.abs(routeCoords[j][0] - sLng);
+        if (dd < stepBest) { stepBest = dd; stepIdx = j; }
       }
-      return bestDist;
+      if (stepIdx <= snappedIdx + 3) continue;
+
+      const d = haversine(lat, lng, sLat, sLng);
+      if (d < upDist) { upDist = d; upcoming = s; }
+    }
+
+    if (upcoming && TURN_TYPES.has(upcoming.maneuver.type) && upDist < ZOOM_START_DIST && upDist > 10) {
+      const t = Math.max(0, Math.min(1, 1 - (upDist - ZOOM_MAX_DIST) / (ZOOM_START_DIST - ZOOM_MAX_DIST)));
+      targetNavZoom = NAV_ZOOM_DEFAULT + (NAV_ZOOM_CLOSE - NAV_ZOOM_DEFAULT) * t;
+      showTurnHighlight(upcoming);
+    } else {
+      hideTurnHighlight();
+    }
+
+    if (upcoming) {
+      document.getElementById('tbDist').textContent = fmtDist(upDist);
+      document.getElementById('tbInstr').textContent = buildInstruction(upcoming);
+      document.getElementById('turnBubble').classList.add('visible');
     }
   }
 
-  snappedIdx = bestIdx;
-  snappedLat = routeCoords[bestIdx][1];
-  snappedLng = routeCoords[bestIdx][0];
-  return bestDist;
+  // Start animation loop if not running
+  if (!navAnimFrame) navAnimLoop();
+}
+
+function navAnimLoop() {
+  if (!isNav) { navAnimFrame = null; return; }
+
+  // Smoothly move toward target position (lerp at 10% per frame)
+  const lerpRate = 0.1;
+  smoothLat += (snappedLat - smoothLat) * lerpRate;
+  smoothLng += (snappedLng - smoothLng) * lerpRate;
+
+  // Smooth bearing (handle 360° wraparound)
+  let bDiff = currentBearing - smoothBearing;
+  if (bDiff > 180) bDiff -= 360;
+  if (bDiff < -180) bDiff += 360;
+  smoothBearing += bDiff * lerpRate;
+
+  // Smooth zoom
+  currentNavZoom += (targetNavZoom - currentNavZoom) * 0.08;
+
+  // Offset center ahead
+  const offsetDist = 40;
+  const bearingRad = smoothBearing * Math.PI / 180;
+  const R = 6371000;
+  const lat1 = smoothLat * Math.PI / 180;
+  const lng1 = smoothLng * Math.PI / 180;
+  const aheadLat = Math.asin(Math.sin(lat1) * Math.cos(offsetDist / R) +
+    Math.cos(lat1) * Math.sin(offsetDist / R) * Math.cos(bearingRad)) * 180 / Math.PI;
+  const aheadLng = (lng1 + Math.atan2(
+    Math.sin(bearingRad) * Math.sin(offsetDist / R) * Math.cos(lat1),
+    Math.cos(offsetDist / R) - Math.sin(lat1) * Math.sin(aheadLat * Math.PI / 180)
+  )) * 180 / Math.PI;
+
+  map.jumpTo({
+    center: [aheadLng, aheadLat],
+    bearing: smoothBearing,
+    pitch: 60,
+    zoom: currentNavZoom
+  });
+
+  navAnimFrame = requestAnimationFrame(navAnimLoop);
 }
 
 function deadReckon() {
@@ -1206,6 +1348,7 @@ function toggleNav() {
     document.getElementById('summary').classList.remove('visible');
     is3D = true;
     document.getElementById('viewToggle').classList.add('active');
+    document.getElementById('speedWidget').classList.add('visible');
 
     // Centre on current GPS position if known, otherwise route start
     let startLng, startLat;
@@ -1244,6 +1387,8 @@ function toggleNav() {
   } else {
     releaseWakeLock();
     clearInterval(deadReckonTimer);
+    if (navAnimFrame) { cancelAnimationFrame(navAnimFrame); navAnimFrame = null; }
+    smoothLat = null; smoothLng = null;
     btn.textContent = '▶ Drive';
     btn.classList.remove('active');
     document.getElementById('topPanel').classList.remove('hidden');
@@ -1252,6 +1397,7 @@ function toggleNav() {
     document.getElementById('summary').classList.add('visible');
     is3D = false;
     document.getElementById('viewToggle').classList.remove('active');
+    document.getElementById('speedWidget').classList.remove('visible');
     if (routeCoords && routeCoords.length) {
       const bounds = routeCoords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(routeCoords[0], routeCoords[0]));
       map.easeTo({ pitch: 0, bearing: 0, duration: 500 });
@@ -1370,75 +1516,6 @@ function hideTurnHighlight() {
     });
   }
   turnHighlightActive = false;
-}
-
-function updateNavView(lat, lng) {
-  targetNavZoom = NAV_ZOOM_DEFAULT;
-
-  if (routeSteps.length) {
-    // Find the next upcoming manoeuvre that is AHEAD of us on the route
-    let upcoming = null, upDist = Infinity;
-
-    for (let i = 0; i < routeSteps.length; i++) {
-      const s = routeSteps[i];
-      if (!s.maneuver || !s.maneuver.location) continue;
-      const sLat = s.maneuver.location[1];
-      const sLng = s.maneuver.location[0];
-
-      // Check if this step is ahead of us by finding its route index
-      let stepIdx = 0, stepBest = Infinity;
-      for (let j = Math.max(0, snappedIdx - 5); j < Math.min(routeCoords.length, snappedIdx + 200); j++) {
-        const dd = Math.abs(routeCoords[j][1] - sLat) + Math.abs(routeCoords[j][0] - sLng);
-        if (dd < stepBest) { stepBest = dd; stepIdx = j; }
-      }
-
-      // Only consider steps AHEAD of current position
-      if (stepIdx <= snappedIdx + 2) continue;
-
-      const d = haversine(lat, lng, sLat, sLng);
-      if (d < upDist) { upDist = d; upcoming = s; }
-    }
-
-    // Only zoom for genuine turn types, and only within range
-    if (upcoming && TURN_TYPES.has(upcoming.maneuver.type) && upDist < ZOOM_START_DIST && upDist > 10) {
-      const t = Math.max(0, Math.min(1, 1 - (upDist - ZOOM_MAX_DIST) / (ZOOM_START_DIST - ZOOM_MAX_DIST)));
-      targetNavZoom = NAV_ZOOM_DEFAULT + (NAV_ZOOM_CLOSE - NAV_ZOOM_DEFAULT) * t;
-      showTurnHighlight(upcoming);
-    } else {
-      hideTurnHighlight();
-    }
-
-    // Update turn bubble
-    if (upcoming) {
-      document.getElementById('tbDist').textContent = fmtDist(upDist);
-      document.getElementById('tbInstr').textContent = buildInstruction(upcoming);
-      document.getElementById('turnBubble').classList.add('visible');
-    }
-  }
-
-  // Smooth zoom — only move 15% toward target each update (gentle, no sudden jumps)
-  currentNavZoom += (targetNavZoom - currentNavZoom) * 0.15;
-
-  // Offset center ahead of user
-  const offsetDist = 40;
-  const bearingRad = currentBearing * Math.PI / 180;
-  const R = 6371000;
-  const lat1 = lat * Math.PI / 180;
-  const lng1 = lng * Math.PI / 180;
-  const aheadLat = Math.asin(Math.sin(lat1) * Math.cos(offsetDist / R) +
-    Math.cos(lat1) * Math.sin(offsetDist / R) * Math.cos(bearingRad)) * 180 / Math.PI;
-  const aheadLng = (lng1 + Math.atan2(
-    Math.sin(bearingRad) * Math.sin(offsetDist / R) * Math.cos(lat1),
-    Math.cos(offsetDist / R) - Math.sin(lat1) * Math.sin(aheadLat * Math.PI / 180)
-  )) * 180 / Math.PI;
-
-  map.easeTo({
-    center: [aheadLng, aheadLat],
-    bearing: currentBearing,
-    pitch: 60,
-    zoom: currentNavZoom,
-    duration: 1000
-  });
 }
 
 // ── Clear route ──
@@ -1619,6 +1696,7 @@ function calcRoute() {
   url += '&traffic=true&travelMode=car&routeType=fastest';
   url += '&instructionsType=text&language=en-GB';
   url += '&routeRepresentation=polyline&maxAlternatives=1';
+  url += '&sectionType=speedLimit';
   if (avoids.length) url += '&avoid=' + avoids.join(',');
 
   fetch(url).then(r => r.json()).then(data => {
@@ -1639,6 +1717,21 @@ function calcRoute() {
     // Convert TomTom response to our internal format
     const ttRoute = data.routes[0];
     const route = convertTTRoute(ttRoute);
+
+    // Extract speed limits from sections
+    speedLimits = [];
+    if (ttRoute.sections) {
+      ttRoute.sections.forEach(sec => {
+        if (sec.sectionType === 'SPEED_LIMIT' && sec.maxSpeedLimitInKmh) {
+          speedLimits.push({
+            startIdx: sec.startPointIndex || 0,
+            endIdx: sec.endPointIndex || 0,
+            limit: sec.maxSpeedLimitInKmh
+          });
+        }
+      });
+    }
+
     drawRoute(route);
 
     // Show traffic delay if significant
