@@ -131,12 +131,17 @@
 
   /* Cancel route removed — map tap toggles summary */
 
-  /* ── User triangle marker ── */
-  .user-triangle {
-    width: 30px; height: 30px;
+  /* ── User triangle — FIXED on screen ── */
+  #userArrow {
+    position: absolute;
+    left: 50%; top: 70%;
+    transform: translateX(-50%);
+    z-index: 900;
+    display: none;
+    pointer-events: none;
     filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
-    transition: transform 0.5s ease;
   }
+  #userArrow.visible { display: block; }
   .maplibregl-marker { transition: transform 0.8s linear !important; }
 
   /* ── Bottom summary ── */
@@ -328,6 +333,12 @@
 <body>
 
 <div id="map"></div>
+
+<div id="userArrow">
+  <svg width="36" height="36" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg">
+    <path d="M15 2 L26 26 L15 20 L4 26 Z" fill="#4a90d9" stroke="white" stroke-width="2.5" stroke-linejoin="round"/>
+  </svg>
+</div>
 
 <div id="topPanel">
   <div id="stopsBox"></div>
@@ -711,24 +722,12 @@ function closePoiPopup() {
 
   // Return to whatever mode we were in
   if (isNav && currentLat !== null) {
-    // Resume nav view - follow user position
-    // Resume nav view with offset
-    const od = 40;
-    const br = currentBearing * Math.PI / 180;
-    const Re = 6371000;
-    const l1 = currentLat * Math.PI / 180;
-    const o1 = currentLng * Math.PI / 180;
-    const al = Math.asin(Math.sin(l1) * Math.cos(od / Re) +
-      Math.cos(l1) * Math.sin(od / Re) * Math.cos(br)) * 180 / Math.PI;
-    const ol = (o1 + Math.atan2(
-      Math.sin(br) * Math.sin(od / Re) * Math.cos(l1),
-      Math.cos(od / Re) - Math.sin(l1) * Math.sin(al * Math.PI / 180)
-    )) * 180 / Math.PI;
-
+    lastEaseTime = Date.now();
     map.easeTo({
-      center: [ol, al],
+      center: [snappedLng || currentLng, snappedLat || currentLat],
       bearing: currentBearing,
-      pitch: 60, zoom: 16, duration: 800
+      pitch: 60, zoom: 16, duration: 800,
+      padding: { top: Math.round(window.innerHeight * 0.4), bottom: 0, left: 0, right: 0 }
     });
   } else if (routeCoords && routeCoords.length) {
     // Return to route overview
@@ -835,8 +834,8 @@ function doLocate() {
 // ── Snap to road & navigation state ──
 let snappedLat = null, snappedLng = null;
 let snappedIdx = 0;
-let currentSpeed = 0;         // m/s
-let currentSpeedKmh = 0;      // km/h for display
+let currentSpeed = 0;
+let currentSpeedKmh = 0;
 let lastGpsTime = 0;
 let deadReckonTimer = null;
 const GPS_TIMEOUT = 5000;
@@ -845,16 +844,13 @@ let offRouteCount = 0;
 let isRerouting = false;
 let currentNavZoom = 16;
 let targetNavZoom = 16;
-let smoothLat = null, smoothLng = null;  // Smoothed map center
-let smoothBearing = 0;
-let navAnimFrame = null;
+let lastEaseTime = 0;
 
 function onGps(pos) {
   currentLat = pos.coords.latitude;
   currentLng = pos.coords.longitude;
   lastGpsTime = Date.now();
 
-  // Speed from GPS
   if (pos.coords.speed !== null && pos.coords.speed >= 0) {
     currentSpeed = pos.coords.speed;
   } else if (prevPos) {
@@ -863,7 +859,7 @@ function onGps(pos) {
     if (dt > 0.5 && d > 2) currentSpeed = d / dt;
   }
   currentSpeedKmh = Math.round(currentSpeed * 3.6);
-  updateSpeedDisplay();
+  if (isNav) updateSpeedDisplay();
 
   if (isNav && routeCoords && routeCoords.length > 1) {
     const distFromRoute = snapToRoute(currentLat, currentLng);
@@ -871,13 +867,10 @@ function onGps(pos) {
     if (distFromRoute > OFF_ROUTE_DIST) {
       offRouteCount++;
       if (offRouteCount >= 3 && !isRerouting) autoReroute();
-      showUser(currentLat, currentLng);
     } else {
       offRouteCount = 0;
-      showUser(snappedLat, snappedLng);
     }
 
-    // Get bearing from route direction, not GPS
     if (snappedIdx < routeCoords.length - 2) {
       const lookAhead = Math.min(snappedIdx + 5, routeCoords.length - 1);
       currentBearing = calcBearing(
@@ -886,24 +879,21 @@ function onGps(pos) {
       );
     }
 
-    if (userMarkerEl) userMarkerEl.style.transform = `rotate(${currentBearing}deg)`;
-    updateNavTarget(snappedLat, snappedLng);
+    moveMapNav(snappedLat, snappedLng);
     updateTravelledRoute(snappedLat, snappedLng);
     updateRouteBarPosition(snappedLat, snappedLng);
 
     clearInterval(deadReckonTimer);
     deadReckonTimer = setInterval(deadReckon, 1000);
   } else {
-    showUser(currentLat, currentLng);
+    showUserDot(currentLat, currentLng);
 
     if (prevPos) {
       const d = haversine(prevPos.lat, prevPos.lng, currentLat, currentLng);
       if (d > 3) {
         currentBearing = calcBearing(prevPos.lat, prevPos.lng, currentLat, currentLng);
-        if (userMarkerEl) userMarkerEl.style.transform = `rotate(${currentBearing}deg)`;
       }
     }
-
     if (hasRoute) updateRouteBarPosition(currentLat, currentLng);
   }
 
@@ -911,7 +901,6 @@ function onGps(pos) {
 }
 
 function snapToRoute(lat, lng) {
-  // Simple forward-only nearest point search - no interpolation
   const searchStart = Math.max(0, snappedIdx - 2);
   const searchEnd = Math.min(routeCoords.length - 1, snappedIdx + 80);
 
@@ -921,43 +910,27 @@ function snapToRoute(lat, lng) {
     if (d < bestDist) { bestDist = d; bestIdx = i; }
   }
 
-  // Never go backwards more than 1 point
-  if (bestIdx < snappedIdx - 1) bestIdx = snappedIdx;
-
-  // Only advance if the new point is genuinely closer to GPS
-  if (bestIdx >= snappedIdx) {
-    snappedIdx = bestIdx;
-  }
+  if (bestIdx >= snappedIdx) snappedIdx = bestIdx;
 
   snappedLat = routeCoords[snappedIdx][1];
   snappedLng = routeCoords[snappedIdx][0];
   return bestDist;
 }
 
-// ── Smooth animation loop — updates map position gradually ──
-function updateNavTarget(lat, lng) {
-  // Set targets for the animation loop
-  if (smoothLat === null) { smoothLat = lat; smoothLng = lng; smoothBearing = currentBearing; }
-
-  // Find upcoming manoeuvre for zoom
+function moveMapNav(lat, lng) {
   targetNavZoom = NAV_ZOOM_DEFAULT;
   if (routeSteps.length) {
     let upcoming = null, upDist = Infinity;
     for (let i = 0; i < routeSteps.length; i++) {
       const s = routeSteps[i];
       if (!s.maneuver || !s.maneuver.location) continue;
-      const sLat = s.maneuver.location[1];
-      const sLng = s.maneuver.location[0];
-
-      // Only steps ahead
       let stepIdx = 0, stepBest = Infinity;
-      for (let j = Math.max(0, snappedIdx); j < Math.min(routeCoords.length, snappedIdx + 200); j++) {
-        const dd = Math.abs(routeCoords[j][1] - sLat) + Math.abs(routeCoords[j][0] - sLng);
+      for (let j = snappedIdx; j < Math.min(routeCoords.length, snappedIdx + 200); j++) {
+        const dd = Math.abs(routeCoords[j][1] - s.maneuver.location[1]) + Math.abs(routeCoords[j][0] - s.maneuver.location[0]);
         if (dd < stepBest) { stepBest = dd; stepIdx = j; }
       }
       if (stepIdx <= snappedIdx + 3) continue;
-
-      const d = haversine(lat, lng, sLat, sLng);
+      const d = haversine(lat, lng, s.maneuver.location[1], s.maneuver.location[0]);
       if (d < upDist) { upDist = d; upcoming = s; }
     }
 
@@ -976,252 +949,35 @@ function updateNavTarget(lat, lng) {
     }
   }
 
-  // Start animation loop if not running
-  if (!navAnimFrame) navAnimLoop();
-}
+  currentNavZoom += (targetNavZoom - currentNavZoom) * 0.15;
 
-function navAnimLoop() {
-  if (!isNav) { navAnimFrame = null; return; }
+  const now = Date.now();
+  const duration = Math.max(800, Math.min(2000, (now - lastEaseTime) * 1.2));
+  lastEaseTime = now;
 
-  // Smoothly move toward target position (lerp at 10% per frame)
-  const lerpRate = 0.1;
-  smoothLat += (snappedLat - smoothLat) * lerpRate;
-  smoothLng += (snappedLng - smoothLng) * lerpRate;
-
-  // Smooth bearing (handle 360° wraparound)
-  let bDiff = currentBearing - smoothBearing;
-  if (bDiff > 180) bDiff -= 360;
-  if (bDiff < -180) bDiff += 360;
-  smoothBearing += bDiff * lerpRate;
-
-  // Smooth zoom
-  currentNavZoom += (targetNavZoom - currentNavZoom) * 0.08;
-
-  // Offset center ahead
-  const offsetDist = 40;
-  const bearingRad = smoothBearing * Math.PI / 180;
-  const R = 6371000;
-  const lat1 = smoothLat * Math.PI / 180;
-  const lng1 = smoothLng * Math.PI / 180;
-  const aheadLat = Math.asin(Math.sin(lat1) * Math.cos(offsetDist / R) +
-    Math.cos(lat1) * Math.sin(offsetDist / R) * Math.cos(bearingRad)) * 180 / Math.PI;
-  const aheadLng = (lng1 + Math.atan2(
-    Math.sin(bearingRad) * Math.sin(offsetDist / R) * Math.cos(lat1),
-    Math.cos(offsetDist / R) - Math.sin(lat1) * Math.sin(aheadLat * Math.PI / 180)
-  )) * 180 / Math.PI;
-
-  map.jumpTo({
-    center: [aheadLng, aheadLat],
-    bearing: smoothBearing,
+  map.easeTo({
+    center: [lng, lat],
+    bearing: currentBearing,
     pitch: 60,
-    zoom: currentNavZoom
-  });
-
-  navAnimFrame = requestAnimationFrame(navAnimLoop);
-}
-
-function deadReckon() {
-  if (!isNav || !routeCoords || currentSpeed < 1) return;
-  const timeSinceGps = Date.now() - lastGpsTime;
-  if (timeSinceGps < GPS_TIMEOUT) return;
-
-  // Advance along route at current speed
-  let distToMove = currentSpeed * 1; // 1 second of travel
-  let idx = snappedIdx;
-
-  while (distToMove > 0 && idx < routeCoords.length - 1) {
-    const segDist = haversine(
-      routeCoords[idx][1], routeCoords[idx][0],
-      routeCoords[idx + 1][1], routeCoords[idx + 1][0]
-    );
-    if (distToMove >= segDist) {
-      distToMove -= segDist;
-      idx++;
-    } else {
-      // Interpolate along segment
-      const frac = distToMove / segDist;
-      snappedLat = routeCoords[idx][1] + frac * (routeCoords[idx + 1][1] - routeCoords[idx][1]);
-      snappedLng = routeCoords[idx][0] + frac * (routeCoords[idx + 1][0] - routeCoords[idx][0]);
-      distToMove = 0;
-    }
-  }
-
-  snappedIdx = idx;
-  if (idx < routeCoords.length) {
-    snappedLat = snappedLat || routeCoords[idx][1];
-    snappedLng = snappedLng || routeCoords[idx][0];
-  }
-
-  // Update bearing from route
-  if (snappedIdx < routeCoords.length - 1) {
-    currentBearing = calcBearing(
-      routeCoords[snappedIdx][1], routeCoords[snappedIdx][0],
-      routeCoords[snappedIdx + 1][1], routeCoords[snappedIdx + 1][0]
-    );
-  }
-
-  if (userMarkerEl) userMarkerEl.style.transform = `rotate(${currentBearing}deg)`;
-  showUser(snappedLat, snappedLng);
-  updateNavView(snappedLat, snappedLng);
-  updateTravelledRoute(snappedLat, snappedLng);
-  updateRouteBarPosition(snappedLat, snappedLng);
-}
-
-// ── Auto-reroute when off route ──
-function autoReroute() {
-  if (isRerouting) return;
-  isRerouting = true;
-
-  // Flash the turn bubble to show rerouting
-  document.getElementById('tbDist').textContent = '⟳';
-  document.getElementById('tbInstr').textContent = 'Rerouting...';
-  document.getElementById('turnBubble').classList.add('visible');
-
-  // Get remaining destination(s) — current position to final destination
-  // Find which stops we haven't passed yet
-  const remainingStops = [];
-  remainingStops.push({ lat: currentLat, lng: currentLng }); // Start from current position
-
-  // Add any via stops we haven't reached yet
-  for (let i = 1; i < stops.length; i++) {
-    const stopDist = haversine(currentLat, currentLng, stops[i].lat, stops[i].lng);
-    // Include stops that are more than 200m away (haven't been reached)
-    if (stopDist > 200) {
-      remainingStops.push({ lat: stops[i].lat, lng: stops[i].lng });
-    }
-  }
-
-  // Always include the final destination
-  const finalDest = stops[stops.length - 1];
-  if (remainingStops[remainingStops.length - 1].lat !== finalDest.lat ||
-      remainingStops[remainingStops.length - 1].lng !== finalDest.lng) {
-    remainingStops.push({ lat: finalDest.lat, lng: finalDest.lng });
-  }
-
-  if (remainingStops.length < 2) { isRerouting = false; return; }
-
-  // Build TomTom reroute request
-  const ttKey = localStorage.getItem(TT_KEY_STORE);
-  if (!ttKey) { isRerouting = false; return; }
-
-  const avoids = [];
-  document.querySelectorAll('.chip.active[data-ex]').forEach(c => {
-    const ex = c.dataset.ex;
-    if (ex === 'toll') avoids.push('tollRoads');
-    if (ex === 'motorway') avoids.push('motorways');
-    if (ex === 'ferry') avoids.push('ferries');
-  });
-
-  const coords = remainingStops.map(s => `${s.lat},${s.lng}`).join(':');
-  let url = `https://api.tomtom.com/routing/1/calculateRoute/${coords}/json?key=${ttKey}`;
-  url += '&traffic=true&travelMode=car&routeType=fastest';
-  url += '&instructionsType=text&language=en-GB&routeRepresentation=polyline';
-  if (avoids.length) url += '&avoid=' + avoids.join(',');
-
-  fetch(url).then(r => r.json()).then(data => {
-    isRerouting = false;
-    offRouteCount = 0;
-
-    if (!data.routes || !data.routes.length) return;
-
-    const route = convertTTRoute(data.routes[0]);
-
-    // Clear old route layers
-    ['route-travelled-line', 'route-outline', 'route-line', 'route-arrows', 'turn-highlight-line', 'turn-highlight-glow', 'turn-arrow-layer'].forEach(id => {
-      if (map.getLayer(id)) map.removeLayer(id);
-    });
-    ['route', 'route-travelled', 'route-arrows-src', 'turn-highlight', 'turn-arrow-src'].forEach(id => {
-      if (map.getSource(id)) map.removeSource(id);
-    });
-    turnHighlightActive = false;
-
-    routeCoords = route.geometry.coordinates;
-    routeSteps = [];
-    route.legs.forEach(leg => routeSteps.push(...leg.steps));
-    
-    // Find our position on the new route (don't reset to 0)
-    let bestRerouteIdx = 0, bestRerouteDist = Infinity;
-    for (let i = 0; i < routeCoords.length; i++) {
-      const d = haversine(currentLat, currentLng, routeCoords[i][1], routeCoords[i][0]);
-      if (d < bestRerouteDist) { bestRerouteDist = d; bestRerouteIdx = i; }
-    }
-    snappedIdx = bestRerouteIdx;
-    currentNavZoom = NAV_ZOOM_DEFAULT;
-
-    // Redraw route
-    map.addSource('route-travelled', {
-      type: 'geojson',
-      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [routeCoords[0], routeCoords[0]] } }
-    });
-    map.addSource('route', {
-      type: 'geojson',
-      data: { type: 'Feature', geometry: route.geometry }
-    });
-    map.addLayer({
-      id: 'route-outline', type: 'line', source: 'route',
-      layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#2563a8', 'line-width': 16, 'line-opacity': 0.4 }
-    });
-    map.addLayer({
-      id: 'route-line', type: 'line', source: 'route',
-      layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#4a90d9', 'line-width': 12, 'line-opacity': 0.9 }
-    });
-    map.addLayer({
-      id: 'route-travelled-line', type: 'line', source: 'route-travelled',
-      layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': 'rgba(74,144,217,0.3)', 'line-width': 12, 'line-opacity': 1 }
-    });
-
-    // Traffic overlay on top
-    ensureTrafficLayer();
-    addRouteArrows();
-
-    // Update summary
-    let totalSec = 0, totalM = 0;
-    route.legs.forEach(l => { totalSec += l.duration; totalM += l.distance; });
-    totalRouteLength = totalM;
-    document.getElementById('sTime').textContent = fmtDur(totalSec);
-    document.getElementById('sDist').textContent = fmtDist(totalM);
-
-    // Update directions
-    const dirList = document.getElementById('dirList');
-    dirList.innerHTML = '';
-    let n = 1;
-    route.legs.forEach((leg, legIdx) => {
-      leg.steps.forEach(step => {
-        const d = document.createElement('div'); d.className = 'dir-step';
-        if (step.maneuver.type === 'arrive') {
-          d.innerHTML = `<div class="step-n" style="color:var(--green)">✓</div><div><div>Arrive at destination</div></div>`;
-        } else {
-          d.innerHTML = `<div class="step-n">${n}</div><div><div>${buildInstruction(step)}</div>${step.distance ? `<div class="step-d">${fmtDist(step.distance)}</div>` : ''}</div>`;
-          n++;
-        }
-        dirList.appendChild(d);
-      });
-    });
-
-    // Re-search POIs
-    searchRoutePOIs();
-
-  }).catch(() => {
-    isRerouting = false;
+    zoom: currentNavZoom,
+    duration: duration,
+    easing: t => t,
+    essential: true,
+    padding: { top: Math.round(window.innerHeight * 0.4), bottom: 0, left: 0, right: 0 }
   });
 }
 
-function showUser(lat, lng) {
+function showUserDot(lat, lng) {
   if (!userMarker) {
-    userMarkerEl = document.createElement('div');
-    userMarkerEl.className = 'user-triangle';
-    userMarkerEl.innerHTML = `<svg width="30" height="30" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg">
-      <path d="M15 2 L26 26 L15 20 L4 26 Z" fill="#4a90d9" stroke="white" stroke-width="2.5" stroke-linejoin="round"/>
-    </svg>`;
-    userMarker = new maplibregl.Marker({ element: userMarkerEl, anchor: 'center' })
-      .setLngLat([lng, lat]).addTo(map);
+    const el = document.createElement('div');
+    el.style.cssText = 'width:18px;height:18px;background:#4a90d9;border:3px solid #fff;border-radius:50%;box-shadow:0 0 6px rgba(74,144,217,0.5);';
+    userMarker = new maplibregl.Marker({ element: el }).setLngLat([lng, lat]).addTo(map);
   } else {
     userMarker.setLngLat([lng, lat]);
   }
 }
+
+
 
 function useMyLocation(stopId) {
   if (currentLat === null) {
@@ -1346,58 +1102,42 @@ function toggleNav() {
     document.getElementById('topPanel').classList.remove('collapsed');
     document.getElementById('topPanel').classList.add('hidden');
     document.getElementById('summary').classList.remove('visible');
+    document.getElementById('userArrow').classList.add('visible');
+    document.getElementById('speedWidget').classList.add('visible');
     is3D = true;
     document.getElementById('viewToggle').classList.add('active');
-    document.getElementById('speedWidget').classList.add('visible');
 
-    // Centre on current GPS position if known, otherwise route start
+    // Hide blue dot marker if showing
+    if (userMarker) { userMarker.remove(); userMarker = null; }
+
+    // Centre on current position or route start
     let startLng, startLat;
-    if (currentLat !== null && currentLng !== null) {
-      startLng = currentLng;
-      startLat = currentLat;
-    } else if (stops.length && stops[0].lat !== null) {
-      startLng = stops[0].lng;
-      startLat = stops[0].lat;
-    } else if (routeCoords && routeCoords.length) {
-      startLng = routeCoords[0][0];
-      startLat = routeCoords[0][1];
-    } else {
-      startLng = map.getCenter().lng;
-      startLat = map.getCenter().lat;
-    }
+    if (currentLat !== null) { startLng = currentLng; startLat = currentLat; }
+    else if (stops.length && stops[0].lat) { startLng = stops[0].lng; startLat = stops[0].lat; }
+    else if (routeCoords && routeCoords.length) { startLng = routeCoords[0][0]; startLat = routeCoords[0][1]; }
+    else { startLng = map.getCenter().lng; startLat = map.getCenter().lat; }
 
-    // Offset center ahead so triangle appears lower on screen
-    const offDist = 40;
-    const bRad = currentBearing * Math.PI / 180;
-    const Rr = 6371000;
-    const la1 = startLat * Math.PI / 180;
-    const lo1 = startLng * Math.PI / 180;
-    const aLat = Math.asin(Math.sin(la1) * Math.cos(offDist / Rr) +
-      Math.cos(la1) * Math.sin(offDist / Rr) * Math.cos(bRad)) * 180 / Math.PI;
-    const aLng = (lo1 + Math.atan2(
-      Math.sin(bRad) * Math.sin(offDist / Rr) * Math.cos(la1),
-      Math.cos(offDist / Rr) - Math.sin(la1) * Math.sin(aLat * Math.PI / 180)
-    )) * 180 / Math.PI;
-
+    lastEaseTime = Date.now();
     map.easeTo({
-      center: [aLng, aLat],
+      center: [startLng, startLat],
       bearing: currentBearing,
-      pitch: 60, zoom: 16, duration: 800
+      pitch: 60, zoom: 16, duration: 800,
+      padding: { top: Math.round(window.innerHeight * 0.4), bottom: 0, left: 0, right: 0 }
     });
   } else {
     releaseWakeLock();
     clearInterval(deadReckonTimer);
-    if (navAnimFrame) { cancelAnimationFrame(navAnimFrame); navAnimFrame = null; }
-    smoothLat = null; smoothLng = null;
     btn.textContent = '▶ Drive';
     btn.classList.remove('active');
     document.getElementById('topPanel').classList.remove('hidden');
     document.getElementById('topPanel').classList.add('collapsed');
     document.getElementById('turnBubble').classList.remove('visible');
+    document.getElementById('userArrow').classList.remove('visible');
+    document.getElementById('speedWidget').classList.remove('visible');
     document.getElementById('summary').classList.add('visible');
     is3D = false;
     document.getElementById('viewToggle').classList.remove('active');
-    document.getElementById('speedWidget').classList.remove('visible');
+    map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 });
     if (routeCoords && routeCoords.length) {
       const bounds = routeCoords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(routeCoords[0], routeCoords[0]));
       map.easeTo({ pitch: 0, bearing: 0, duration: 500 });
@@ -1721,6 +1461,7 @@ function calcRoute() {
     // Extract speed limits from sections
     speedLimits = [];
     if (ttRoute.sections) {
+      let pointOffset = 0;
       ttRoute.sections.forEach(sec => {
         if (sec.sectionType === 'SPEED_LIMIT' && sec.maxSpeedLimitInKmh) {
           speedLimits.push({
@@ -1729,6 +1470,21 @@ function calcRoute() {
             limit: sec.maxSpeedLimitInKmh
           });
         }
+      });
+    }
+    // If no speed limit sections, try to extract from legs
+    if (speedLimits.length === 0 && ttRoute.legs) {
+      let idx = 0;
+      ttRoute.legs.forEach(leg => {
+        const legLen = (leg.points || []).length;
+        if (leg.summary && leg.summary.speedLimit) {
+          speedLimits.push({
+            startIdx: idx,
+            endIdx: idx + legLen - 1,
+            limit: leg.summary.speedLimit
+          });
+        }
+        idx += legLen;
       });
     }
 
